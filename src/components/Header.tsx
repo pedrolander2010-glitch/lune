@@ -109,9 +109,9 @@ export const Header: React.FC<HeaderProps> = ({
       )}
 
       {/* Action buttons & Frosted Glass indicators */}
-      <div className="flex items-center gap-2 sm:gap-4">
+      <div className="flex items-center gap-1.5 sm:gap-3">
         {/* Latency metric from theme */}
-        <div className="text-right hidden sm:block">
+        <div className="text-right hidden md:block">
           <p className="text-[9px] font-mono text-slate-400 leading-none uppercase tracking-wider">Latência</p>
           <p className="text-xs sm:text-sm font-mono font-bold text-slate-200 mt-0.5">
             {roomId ? (peerCount > 1 ? '14ms' : '0ms') : '12ms'}
@@ -121,17 +121,18 @@ export const Header: React.FC<HeaderProps> = ({
         {/* E2EE Security Badge matching theme */}
         <button
           onClick={onOpenSecurity}
-          className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-xs font-mono text-emerald-400 font-medium transition hover:bg-emerald-500/15 active:scale-95"
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-[11px] sm:text-xs font-mono text-emerald-400 font-medium transition hover:bg-emerald-500/15 active:scale-95 shrink-0"
           title="Verificar Criptografia E2EE de Ponta a Ponta"
         >
-          <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-          <span className="tracking-wide">E2EE SECURE</span>
+          <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shrink-0" />
+          <span className="tracking-wide hidden xs:inline">E2EE SECURE</span>
+          <span className="tracking-wide xs:hidden">E2EE</span>
         </button>
 
         {/* FPS Switch Badge */}
         <button
           onClick={onToggleFps}
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-2xl text-xs font-semibold border backdrop-blur-md transition active:scale-95 ${
+          className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-2xl text-xs font-semibold border backdrop-blur-md transition active:scale-95 shrink-0 ${
             settings.preferredFps === 60
               ? 'bg-indigo-500/20 border-indigo-400/30 text-indigo-300 hover:bg-indigo-500/30'
               : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10'
@@ -142,27 +143,13 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="font-mono">{settings.preferredFps} FPS</span>
         </button>
 
-        {/* Friends button */}
-        <button
-          onClick={onOpenFriends}
-          className="relative p-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 backdrop-blur-md transition active:scale-95"
-          title="Amigos e convites"
-        >
-          <Users className="w-4 h-4" />
-          {pendingRequestsCount > 0 && (
-            <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-indigo-500 text-[10px] font-bold text-white shadow-md shadow-indigo-500/50">
-              {pendingRequestsCount}
-            </span>
-          )}
-        </button>
-
         {/* PWA Install Button */}
         <PWAInstallButton compact={true} />
 
         {/* Theme toggle */}
         <button
           onClick={onToggleTheme}
-          className="p-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 backdrop-blur-md transition active:scale-95"
+          className="p-2 sm:p-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 backdrop-blur-md transition active:scale-95 shrink-0"
           title={settings.darkMode ? 'Mudar para Modo Claro' : 'Mudar para Modo Escuro'}
         >
           {settings.darkMode ? <Moon className="w-4 h-4 text-indigo-300" /> : <Sun className="w-4 h-4 text-amber-400" />}
@@ -171,16 +158,16 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Settings button */}
         <button
           onClick={onOpenSettings}
-          className="p-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 backdrop-blur-md transition active:scale-95"
+          className="p-2 sm:p-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 backdrop-blur-md transition active:scale-95 shrink-0"
           title="Configurações de Transmissão"
         >
           <Settings className="w-4 h-4" />
         </button>
 
-        {/* User avatar circle matching Frosted Glass theme */}
+        {/* User avatar circle */}
         <button
           onClick={onOpenFriends}
-          className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300 font-bold text-xs sm:text-sm shadow-sm transition hover:scale-105 active:scale-95"
+          className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300 font-bold text-xs sm:text-sm shadow-sm transition hover:scale-105 active:scale-95 shrink-0"
           title={`Perfil de ${displayName}`}
         >
           {displayName.substring(0, 2).toUpperCase()}

@@ -226,12 +226,12 @@ export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
   return (
     <div className="flex flex-col h-full w-full bg-[#08080a]/60 backdrop-blur-2xl">
       {/* Top Bar with Navigation Tabs, Server Health Pill & Friend Search */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between p-4 border-b border-white/[0.08] gap-3">
-        <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pb-1 sm:pb-0">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between p-3 sm:p-4 border-b border-white/[0.08] gap-3 shrink-0">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar scroll-smooth pb-1 sm:pb-0 shrink-0 w-full sm:w-auto">
           <button
             type="button"
             onClick={() => setActiveTab('ONLINE')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+            className={`px-3.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 active:scale-95 transition ${
               activeTab === 'ONLINE'
                 ? 'bg-white/15 text-white shadow-sm'
                 : 'text-slate-400 hover:text-white'
@@ -242,7 +242,7 @@ export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('ALL')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+            className={`px-3.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 active:scale-95 transition ${
               activeTab === 'ALL'
                 ? 'bg-white/15 text-white shadow-sm'
                 : 'text-slate-400 hover:text-white'
@@ -253,7 +253,7 @@ export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('PENDING')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap flex items-center gap-1.5 transition ${
+            className={`px-3.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 active:scale-95 transition ${
               activeTab === 'PENDING'
                 ? 'bg-white/15 text-white shadow-sm'
                 : 'text-slate-400 hover:text-white'
@@ -269,7 +269,7 @@ export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('BLOCKED')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+            className={`px-3.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 active:scale-95 transition ${
               activeTab === 'BLOCKED'
                 ? 'bg-white/15 text-white shadow-sm'
                 : 'text-slate-400 hover:text-white'
@@ -280,7 +280,7 @@ export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('ADD')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap flex items-center gap-1 transition ${
+            className={`px-3.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 active:scale-95 transition ${
               activeTab === 'ADD'
                 ? 'bg-white text-black shadow-sm font-bold'
                 : 'bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/30'
@@ -291,8 +291,8 @@ export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
         </div>
 
         {/* Server Status Pill */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <div className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300 shrink-0">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span className="font-semibold">Servidor Online</span>
             {serverStatus && (
@@ -303,14 +303,14 @@ export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
           </div>
 
           {activeTab !== 'ADD' && (
-            <div className="relative w-full sm:w-56">
+            <div className="relative w-full sm:w-56 mt-1 sm:mt-0">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 placeholder="Buscar em amigos..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl bg-white/[0.04] border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-white/30"
+                className="w-full pl-8 pr-3 py-2 sm:py-1.5 text-xs rounded-xl bg-white/[0.04] border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-white/30"
               />
             </div>
           )}
@@ -318,7 +318,7 @@ export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
       </div>
 
       {/* Main Friends View Content */}
-      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 pb-24 md:pb-6 custom-scrollbar">
         {/* TAB: ADD FRIEND */}
         {activeTab === 'ADD' && (
           <div className="max-w-2xl mx-auto space-y-6 pt-2 text-left">
@@ -383,31 +383,32 @@ export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
               <label className="text-xs font-semibold text-slate-200 block">
                 Adicionar por @username ou e-mail:
               </label>
-              <div className="relative">
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-mono text-sm text-slate-400 font-semibold">
-                  @
-                </span>
-                <input
-                  type="text"
-                  placeholder="Digite ex: lander, carlos ou o e-mail do seu amigo"
-                  value={addUsernameInput}
-                  onChange={(e) => setAddUsernameInput(e.target.value)}
-                  className="w-full pl-8 pr-32 py-3 rounded-xl bg-white/[0.04] border border-white/15 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-400 shadow-inner"
-                  required
-                />
-                <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                  <LuneButton
-                    type="submit"
-                    variant="chrome"
-                    size="sm"
-                    loading={addLoading}
-                    disabled={!addUsernameInput.trim()}
-                  >
-                    Enviar Pedido
-                  </LuneButton>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <div className="relative flex-1">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-mono text-sm text-slate-400 font-semibold">
+                    @
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="Digite ex: lander, carlos ou o e-mail do seu amigo"
+                    value={addUsernameInput}
+                    onChange={(e) => setAddUsernameInput(e.target.value)}
+                    className="w-full pl-8 pr-3 py-3 rounded-xl bg-white/[0.04] border border-white/15 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-400 shadow-inner"
+                    required
+                  />
                 </div>
+                <LuneButton
+                  type="submit"
+                  variant="chrome"
+                  size="md"
+                  loading={addLoading}
+                  disabled={!addUsernameInput.trim()}
+                  className="w-full sm:w-auto shrink-0 min-h-[44px]"
+                >
+                  Enviar Pedido
+                </LuneButton>
               </div>
-              <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-slate-400 pt-1 gap-1">
                 <span>
                   Seu @username para amigos te adicionarem:{' '}
                   <strong className="text-white font-mono">@{currentUser.username}</strong>

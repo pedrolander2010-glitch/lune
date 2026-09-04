@@ -16,6 +16,7 @@ import {
   Share2,
   X,
   FileText,
+  ChevronLeft,
 } from 'lucide-react';
 import { LuneConversation, LuneMessage, LuneUser } from '../../types';
 
@@ -188,15 +189,16 @@ export const LuneChatView: React.FC<LuneChatViewProps> = ({
   return (
     <div className="flex flex-col h-full w-full bg-[#070709]/80 backdrop-blur-2xl relative">
       {/* Header */}
-      <div className="flex items-center justify-between p-3.5 border-b border-white/[0.08] bg-white/[0.02]">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between p-3 sm:p-3.5 border-b border-white/[0.08] bg-white/[0.02] shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           {onBackMobile && (
             <button
               type="button"
               onClick={onBackMobile}
-              className="md:hidden p-1 text-slate-400 hover:text-white"
+              className="md:hidden flex items-center justify-center w-10 h-10 -ml-1 rounded-xl bg-white/5 active:bg-white/20 text-slate-200 transition shrink-0"
+              title="Voltar para conversas"
             >
-              ←
+              <ChevronLeft className="w-5 h-5" />
             </button>
           )}
           <LuneAvatar
@@ -205,19 +207,19 @@ export const LuneChatView: React.FC<LuneChatViewProps> = ({
             status={otherMember?.presence || 'ONLINE'}
             size="md"
           />
-          <div className="text-left">
-            <h3 className="text-sm font-bold text-white leading-tight">{title}</h3>
-            <span className="text-[11px] text-slate-400 font-mono">{subtitle}</span>
+          <div className="text-left min-w-0">
+            <h3 className="text-sm font-bold text-white leading-tight truncate">{title}</h3>
+            <span className="text-[11px] text-slate-400 font-mono truncate block">{subtitle}</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
           {otherMember && (
             <>
               <button
                 type="button"
                 onClick={() => onStartCall(otherMember.userId, 'voice')}
-                className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-white transition"
+                className="w-10 h-10 sm:w-9 sm:h-9 rounded-xl bg-white/5 active:bg-white/20 hover:bg-white/15 text-slate-300 hover:text-white transition flex items-center justify-center"
                 title="Chamada de Voz"
               >
                 <Phone className="w-4 h-4" />
@@ -225,7 +227,7 @@ export const LuneChatView: React.FC<LuneChatViewProps> = ({
               <button
                 type="button"
                 onClick={() => onStartCall(otherMember.userId, 'video')}
-                className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-white transition"
+                className="w-10 h-10 sm:w-9 sm:h-9 rounded-xl bg-white/5 active:bg-white/20 hover:bg-white/15 text-slate-300 hover:text-white transition flex items-center justify-center"
                 title="Chamada de Vídeo / Compartilhar Tela"
               >
                 <Video className="w-4 h-4" />
@@ -445,7 +447,7 @@ export const LuneChatView: React.FC<LuneChatViewProps> = ({
           </div>
         )}
 
-        <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+        <form onSubmit={handleSendMessage} className="flex items-center gap-1.5 sm:gap-2">
           {/* File Upload Hidden Input */}
           <input
             ref={fileInputRef}
@@ -457,7 +459,7 @@ export const LuneChatView: React.FC<LuneChatViewProps> = ({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-slate-400 hover:text-white transition shrink-0"
+            className="w-10 h-10 sm:w-9 sm:h-9 rounded-xl bg-white/5 active:bg-white/20 hover:bg-white/15 text-slate-400 hover:text-white transition flex items-center justify-center shrink-0"
             title="Anexar arquivo ou imagem"
           >
             <Paperclip className="w-4 h-4" />
@@ -469,7 +471,7 @@ export const LuneChatView: React.FC<LuneChatViewProps> = ({
               setShowGifPicker((p) => !p);
               setShowEmojiPicker(false);
             }}
-            className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-slate-400 hover:text-white transition shrink-0"
+            className="w-10 h-10 sm:w-9 sm:h-9 rounded-xl bg-white/5 active:bg-white/20 hover:bg-white/15 text-slate-400 hover:text-white transition flex items-center justify-center shrink-0"
             title="LUNE GIFs"
           >
             <span className="font-black text-[11px] tracking-tight">GIF</span>
@@ -481,7 +483,7 @@ export const LuneChatView: React.FC<LuneChatViewProps> = ({
               setShowEmojiPicker((p) => !p);
               setShowGifPicker(false);
             }}
-            className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-slate-400 hover:text-white transition shrink-0"
+            className="w-10 h-10 sm:w-9 sm:h-9 rounded-xl bg-white/5 active:bg-white/20 hover:bg-white/15 text-slate-400 hover:text-white transition flex items-center justify-center shrink-0"
             title="Emojis & LUNE Stickers"
           >
             <Smile className="w-4 h-4" />
@@ -489,17 +491,17 @@ export const LuneChatView: React.FC<LuneChatViewProps> = ({
 
           <textarea
             rows={1}
-            placeholder={`Conversar em #${title.toLowerCase()}... (Enter envia)`}
+            placeholder={`Conversar em #${title.toLowerCase()}...`}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            className="flex-1 py-2 px-3.5 rounded-xl bg-white/[0.04] border border-white/10 text-white text-xs placeholder-slate-500 focus:outline-none focus:border-white/30 resize-none max-h-24 custom-scrollbar"
+            className="flex-1 py-2.5 sm:py-2 px-3 sm:px-3.5 rounded-xl bg-white/[0.04] border border-white/10 text-white text-xs placeholder-slate-500 focus:outline-none focus:border-white/30 resize-none max-h-24 custom-scrollbar"
           />
 
           <button
             type="submit"
             disabled={!inputText.trim() && !attachedFile}
-            className="p-2 rounded-xl bg-white text-black hover:bg-slate-200 disabled:opacity-30 disabled:hover:bg-white transition shrink-0 shadow-sm"
+            className="w-10 h-10 sm:w-9 sm:h-9 rounded-xl bg-white text-black active:bg-slate-300 hover:bg-slate-200 disabled:opacity-30 disabled:hover:bg-white transition flex items-center justify-center shrink-0 shadow-sm"
             title="Enviar mensagem"
           >
             <Send className="w-4 h-4" />

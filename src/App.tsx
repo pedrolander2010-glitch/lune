@@ -591,7 +591,7 @@ export default function App() {
   });
 
   return (
-    <div className="flex h-screen w-screen bg-[#060608] text-slate-100 overflow-hidden font-sans select-none antialiased">
+    <div className="flex flex-col md:flex-row h-screen h-[100dvh] w-screen bg-[#060608] text-slate-100 overflow-hidden font-sans antialiased">
       {/* Toast Notification Alert */}
       {toastMessage && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-2xl bg-[#0e0e13]/90 backdrop-blur-xl border border-white/20 text-xs font-semibold text-white shadow-2xl animate-fade-in flex items-center gap-2">
@@ -600,8 +600,8 @@ export default function App() {
         </div>
       )}
 
-      {/* 1. LEFT NARROW NAVIGATION RAIL (Y2K Gothic Liquid Glass) */}
-      <aside className="w-16 sm:w-[72px] flex flex-col items-center py-4 justify-between border-r border-white/[0.08] bg-[#08080b]/90 backdrop-blur-2xl z-20 shrink-0">
+      {/* 1. LEFT NARROW NAVIGATION RAIL (Desktop only: Y2K Gothic Liquid Glass) */}
+      <aside className="hidden md:flex w-16 sm:w-[72px] flex-col items-center py-4 justify-between border-r border-white/[0.08] bg-[#08080b]/90 backdrop-blur-2xl z-20 shrink-0">
         <div className="flex flex-col items-center space-y-4 w-full">
           {/* Official LUNE Cat Head Brand Logo */}
           <div
@@ -722,55 +722,67 @@ export default function App() {
 
             {/* Quick Profile & Presence Dropdown */}
             {showPresenceMenu && luneUser && (
-              <div className="absolute left-14 bottom-0 z-50 w-56 p-2 rounded-2xl bg-[#0f0f14]/95 backdrop-blur-2xl border border-white/15 shadow-2xl text-xs space-y-2">
-                <div className="p-2 border-b border-white/10 text-left">
-                  <span className="font-bold text-white block">{luneUser.displayName}</span>
-                  <span className="text-[11px] text-slate-400 font-mono">@{luneUser.username}</span>
-                  {luneUser.role === 'ADMIN' && (
-                    <span className="inline-block mt-1 px-1.5 py-0.2 rounded bg-white/10 text-[9px] font-bold text-slate-300">
-                      ADMINISTRADOR
-                    </span>
-                  )}
-                </div>
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setShowPresenceMenu(false)}
+                />
+                <div className="fixed bottom-20 right-3 sm:absolute sm:left-14 sm:bottom-0 sm:right-auto z-50 w-60 p-2.5 rounded-2xl bg-[#0f0f14]/98 backdrop-blur-2xl border border-white/15 shadow-2xl text-xs space-y-2 animate-fade-in">
+                  <div className="p-2 border-b border-white/10 text-left">
+                    <span className="font-bold text-white block">{luneUser.displayName}</span>
+                    <span className="text-[11px] text-slate-400 font-mono">@{luneUser.username}</span>
+                    {luneUser.role === 'ADMIN' && (
+                      <span className="inline-block mt-1 px-1.5 py-0.2 rounded bg-white/10 text-[9px] font-bold text-slate-300">
+                        ADMINISTRADOR
+                      </span>
+                    )}
+                  </div>
 
-                <div className="space-y-1 text-left">
-                  <span className="text-[10px] uppercase font-semibold text-slate-400 px-2">Definir Status</span>
-                  {(['ONLINE', 'IDLE', 'DO_NOT_DISTURB', 'GHOST', 'OFFLINE'] as LunePresence[]).map((st) => (
+                  <div className="space-y-1 text-left">
+                    <span className="text-[10px] uppercase font-semibold text-slate-400 px-2">Definir Status</span>
+                    {(['ONLINE', 'IDLE', 'DO_NOT_DISTURB', 'GHOST', 'OFFLINE'] as LunePresence[]).map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => {
+                          handleUpdatePresence(st);
+                          setShowPresenceMenu(false);
+                        }}
+                        className={`w-full text-left px-2 py-2 rounded-xl hover:bg-white/10 transition flex items-center justify-between min-h-[36px] ${
+                          luneUser.presence === st ? 'text-white font-semibold bg-white/5' : 'text-slate-300'
+                        }`}
+                      >
+                        <span className="capitalize">{st.toLowerCase().replace(/_/g, ' ')}</span>
+                        {luneUser.presence === st && <span className="text-emerald-400 text-xs">✓</span>}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="pt-1 border-t border-white/10 flex flex-col gap-1">
                     <button
-                      key={st}
                       type="button"
-                      onClick={() => handleUpdatePresence(st)}
-                      className={`w-full text-left px-2 py-1.5 rounded-lg hover:bg-white/10 transition flex items-center justify-between ${
-                        luneUser.presence === st ? 'text-white font-semibold bg-white/5' : 'text-slate-300'
-                      }`}
+                      onClick={() => {
+                        setShowPresenceMenu(false);
+                        setSecurityModalInitialTab('NAME');
+                        setIsSecurityPinModalOpen(true);
+                      }}
+                      className="w-full text-left px-2 py-2 rounded-xl hover:bg-white/10 text-slate-300 hover:text-white transition min-h-[36px]"
                     >
-                      <span className="capitalize">{st.toLowerCase().replace(/_/g, ' ')}</span>
-                      {luneUser.presence === st && <span className="text-emerald-400 text-xs">✓</span>}
+                      Alterar Nome (7d Cooldown)
                     </button>
-                  ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPresenceMenu(false);
+                        handleLogout();
+                      }}
+                      className="w-full text-left px-2 py-2 rounded-xl hover:bg-red-500/15 text-red-300 transition flex items-center gap-1.5 min-h-[36px]"
+                    >
+                      <LogOut className="w-3.5 h-3.5" /> Sair da Conta
+                    </button>
+                  </div>
                 </div>
-
-                <div className="pt-1 border-t border-white/10 flex flex-col gap-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowPresenceMenu(false);
-                      setSecurityModalInitialTab('NAME');
-                      setIsSecurityPinModalOpen(true);
-                    }}
-                    className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition"
-                  >
-                    Alterar Nome (7d Cooldown)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-red-500/15 text-red-300 transition flex items-center gap-1.5"
-                  >
-                    <LogOut className="w-3.5 h-3.5" /> Sair da Conta
-                  </button>
-                </div>
-              </div>
+              </>
             )}
           </div>
         </div>
@@ -778,7 +790,11 @@ export default function App() {
 
       {/* 2. CHATS SIDEBAR (Only visible when currentNav === 'CHATS') */}
       {currentNav === 'CHATS' && (
-        <div className="w-64 sm:w-72 flex flex-col border-r border-white/[0.08] bg-[#0a0a0d]/80 backdrop-blur-xl shrink-0">
+        <div
+          className={`${
+            selectedConversationId ? 'hidden md:flex' : 'flex'
+          } w-full md:w-72 flex-col border-r border-white/[0.08] bg-[#0a0a0d]/80 backdrop-blur-xl shrink-0 h-full pb-20 md:pb-0`}
+        >
           {/* Header */}
           <div className="p-4 border-b border-white/[0.08] flex items-center justify-between">
             <span className="text-sm font-bold text-white tracking-wide">Mensagens Diretas</span>
@@ -866,7 +882,13 @@ export default function App() {
       )}
 
       {/* 3. CENTER MAIN WORKSPACE */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+      <main
+        className={`${
+          currentNav === 'CHATS' && !selectedConversationId ? 'hidden md:flex' : 'flex'
+        } flex-1 flex-col h-full overflow-hidden relative ${
+          currentNav === 'STREAM' || currentNav === 'FRIENDS' || !luneUser ? 'pb-16 md:pb-0' : ''
+        }`}
+      >
         {/* VIEW: CHATS */}
         {currentNav === 'CHATS' && (
           selectedConversation && luneUser ? (
@@ -874,6 +896,7 @@ export default function App() {
               conversation={selectedConversation}
               currentUser={luneUser}
               onStartCall={handleStartCallWithUser}
+              onBackMobile={() => setSelectedConversationId(null)}
             />
           ) : (
             <div className="h-full flex flex-col items-center justify-center p-6 text-center space-y-4">
@@ -1020,6 +1043,99 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* MOBILE BOTTOM NAVIGATION BAR (Visible on screens < 768px when not in active chat) */}
+      {!(currentNav === 'CHATS' && selectedConversationId) && (
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-[#08080b]/98 backdrop-blur-2xl border-t border-white/10 flex items-center justify-around z-40 px-1 pb-safe">
+          {/* Chats */}
+          <button
+            type="button"
+            onClick={() => {
+              setCurrentNav('CHATS');
+              setSelectedConversationId(null);
+            }}
+            className={`flex flex-col items-center justify-center py-1 px-3 rounded-xl transition min-w-[54px] min-h-[44px] active:scale-95 ${
+              currentNav === 'CHATS' ? 'text-white' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <div className={`p-1 rounded-xl ${currentNav === 'CHATS' ? 'bg-white/15 text-white' : ''}`}>
+              <MessageSquare className="w-5 h-5" />
+            </div>
+            <span className="text-[10px] font-medium mt-0.5">Chats</span>
+          </button>
+
+          {/* Friends */}
+          <button
+            type="button"
+            onClick={() => setCurrentNav('FRIENDS')}
+            className={`flex flex-col items-center justify-center py-1 px-3 rounded-xl transition min-w-[54px] min-h-[44px] active:scale-95 relative ${
+              currentNav === 'FRIENDS' ? 'text-white' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <div className={`p-1 rounded-xl relative ${currentNav === 'FRIENDS' ? 'bg-white/15 text-white' : ''}`}>
+              <Users className="w-5 h-5" />
+              {pendingRequestsCount > 0 && (
+                <span className="absolute -top-1 -right-1 px-1.5 py-0.2 rounded-full bg-emerald-400 text-black text-[9px] font-bold animate-pulse">
+                  {pendingRequestsCount}
+                </span>
+              )}
+            </div>
+            <span className="text-[10px] font-medium mt-0.5">Amigos</span>
+          </button>
+
+          {/* Stream */}
+          <button
+            type="button"
+            onClick={() => setCurrentNav('STREAM')}
+            className={`flex flex-col items-center justify-center py-1 px-3 rounded-xl transition min-w-[54px] min-h-[44px] active:scale-95 relative ${
+              currentNav === 'STREAM' ? 'text-white' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <div className={`p-1 rounded-xl relative ${currentNav === 'STREAM' ? 'bg-white/15 text-white' : ''}`}>
+              <Video className="w-5 h-5" />
+              {roomId && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              )}
+            </div>
+            <span className="text-[10px] font-medium mt-0.5">Transmissão</span>
+          </button>
+
+          {/* Settings */}
+          <button
+            type="button"
+            onClick={() => setIsSettingsOpen(true)}
+            className="flex flex-col items-center justify-center py-1 px-3 rounded-xl transition min-w-[54px] min-h-[44px] active:scale-95 text-slate-400 hover:text-slate-200"
+          >
+            <div className="p-1">
+              <Settings className="w-5 h-5" />
+            </div>
+            <span className="text-[10px] font-medium mt-0.5">Ajustes</span>
+          </button>
+
+          {/* Profile / Auth */}
+          <button
+            type="button"
+            onClick={() => {
+              if (!luneUser) {
+                setIsAuthModalOpen(true);
+              } else {
+                setShowPresenceMenu((p) => !p);
+              }
+            }}
+            className="flex flex-col items-center justify-center py-1 px-3 rounded-xl transition min-w-[54px] min-h-[44px] active:scale-95 text-slate-400 hover:text-slate-200"
+          >
+            <LuneAvatar
+              src={luneUser?.avatar || '/logo.svg'}
+              name={luneUser?.displayName || 'Convidado'}
+              status={luneUser?.presence || 'OFFLINE'}
+              size="xs"
+            />
+            <span className="text-[10px] font-medium mt-0.5 truncate max-w-[50px]">
+              {luneUser ? `@${luneUser.username}` : 'Entrar'}
+            </span>
+          </button>
+        </nav>
+      )}
 
       {/* MODALS */}
       {/* 1. LUNE Authentication Modal */}
