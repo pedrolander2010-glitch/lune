@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #050608;
+    color: #e4e7ec;
+    overflow-x: hidden;
+  }
+}
+
+/* LUNE Liquid Glass & Y2K Gothic Aesthetic Tokens */
+.lune-liquid-glass {
+  background: radial-gradient(120% 120% at 50% 0%, rgba(26, 29, 38, 0.7) 0%, rgba(10, 11, 15, 0.85) 100%);
+  backdrop-filter: blur(28px) saturate(140%);
+  -webkit-backdrop-filter: blur(28px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.lune-liquid-glass-subtle {
+  background: rgba(14, 16, 22, 0.6);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.lune-obsidian-surface {
+  background: #08090d;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.lune-chrome-border {
+  border-color: rgba(220, 225, 235, 0.22);
+}
+
+.lune-chrome-glow {
+  box-shadow: 0 0 25px rgba(255, 255, 255, 0.08), inset 0 1px 1px rgba(255, 255, 255, 0.35);
+}
+
+.lune-chrome-text {
+  background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 50%, #64748b 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Reduced Effects Mode */
+.reduced-effects .lune-liquid-glass,
+.reduced-effects .lune-liquid-glass-subtle {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: #0d0f15 !important;
+  box-shadow: none !important;
+}
+
+/* Sleek frosted glass scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}

@@ -1,0 +1,12 @@
+{
+  "name": "lune",
+  "description": "LUNE — Plataforma privada de comunicação em tempo real para amigos com chat persistente, grupos, chamadas de voz e vídeo WebRTC, transmissão de tela 60 FPS, GIFs globais e estética Liquid Glass Y2K Gothic.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
