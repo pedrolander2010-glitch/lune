@@ -76,13 +76,13 @@ export const Header: React.FC<HeaderProps> = ({
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-base sm:text-lg font-bold tracking-tight text-white flex items-center">
-              GlassStream
+              LUNE
               <span className="hidden xs:inline-block text-indigo-400 text-[10px] sm:text-[11px] font-semibold uppercase tracking-widest ml-2 px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20">
-                Private P2P
+                P2P & E2EE
               </span>
             </h1>
           </div>
-          <p className="text-[10px] text-slate-400 hidden md:block">Transmissão em Tempo Real com Baixa Latência</p>
+          <p className="text-[10px] text-slate-400 hidden md:block">Rede Privada em Tempo Real & Chamadas E2EE</p>
         </div>
       </div>
 

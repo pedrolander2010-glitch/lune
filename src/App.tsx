@@ -80,6 +80,8 @@ export default function App() {
 
   // Navigation: 'CHATS' | 'FRIENDS' | 'STREAM'
   const [currentNav, setCurrentNav] = useState<'CHATS' | 'FRIENDS' | 'STREAM'>('CHATS');
+  const [pendingRequestsCount, setPendingRequestsCount] = useState<number>(0);
+  const [inviteParamUser, setInviteParamUser] = useState<string | null>(null);
 
   // Conversations State
   const [conversations, setConversations] = useState<LuneConversation[]>([]);
@@ -129,8 +131,26 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // 1. Check Authenticated Session on Mount
+  // 1. Check Authenticated Session & URL Parameters on Mount
   useEffect(() => {
+    // Check URL parameters for invites or room joins
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const invite = params.get('invite');
+      if (invite) {
+        const clean = invite.replace(/^@/, '').trim();
+        setInviteParamUser(clean);
+        setCurrentNav('FRIENDS');
+      }
+      const room = params.get('room');
+      if (room) {
+        setRoomId(room.trim());
+        setCurrentNav('STREAM');
+      }
+    } catch {
+      // ignore
+    }
+
     const token = localStorage.getItem('lune_session_token');
     if (!token) {
       setAuthChecking(false);
@@ -156,7 +176,7 @@ export default function App() {
       });
   }, []);
 
-  // 2. Fetch Conversations
+  // 2. Fetch Conversations & Pending Friend Requests
   const fetchConversations = useCallback(async () => {
     const token = localStorage.getItem('lune_session_token');
     if (!token) return;
@@ -176,13 +196,36 @@ export default function App() {
     }
   }, [selectedConversationId]);
 
+  const fetchPendingRequests = useCallback(async () => {
+    const token = localStorage.getItem('lune_session_token');
+    if (!token) return;
+    try {
+      const res = await fetch('/api/friends', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok && data.friends) {
+        const pendingIncoming = data.friends.filter(
+          (f: any) => f.status === 'PENDING' && f.isIncoming
+        ).length;
+        setPendingRequestsCount(pendingIncoming);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     if (luneUser) {
       fetchConversations();
-      const interval = setInterval(fetchConversations, 5000);
+      fetchPendingRequests();
+      const interval = setInterval(() => {
+        fetchConversations();
+        fetchPendingRequests();
+      }, 5000);
       return () => clearInterval(interval);
     }
-  }, [luneUser, fetchConversations]);
+  }, [luneUser, fetchConversations, fetchPendingRequests]);
 
   // 3. WebRTC Signal Sender wrapper
   const sendSignal = useCallback((toUserId: string, signalData: any) => {
@@ -598,6 +641,11 @@ export default function App() {
             title="Amigos"
           >
             <Users className="w-5 h-5" />
+            {pendingRequestsCount > 0 && (
+              <span className="absolute -top-1 -right-1 px-1.5 py-0.2 rounded-full bg-emerald-400 text-black text-[10px] font-bold animate-pulse shadow-md">
+                {pendingRequestsCount}
+              </span>
+            )}
           </button>
 
           {/* Navigation Tab: WebRTC Screen Share & Calls */}
@@ -851,7 +899,68 @@ export default function App() {
             currentUser={luneUser}
             onOpenConversation={handleOpenConversationWithUser}
             onStartCall={handleStartCallWithUser}
+            initialAddUsername={inviteParamUser || undefined}
           />
+        )}
+
+        {/* VIEW: GUEST VIEW (When not logged in) */}
+        {!luneUser && !authChecking && (
+          <div className="h-full flex-1 flex flex-col items-center justify-center p-6 text-center space-y-6 max-w-lg mx-auto">
+            <div className="w-20 h-20 rounded-3xl p-4 bg-white/[0.04] border border-white/10 shadow-2xl flex items-center justify-center relative">
+              <img src="/logo.svg" alt="LUNE" className="w-full h-full object-contain filter drop-shadow" />
+              <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-emerald-400 border-2 border-[#0a0a0d] animate-pulse" />
+            </div>
+
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs font-mono text-emerald-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>SERVIDORES LUNE 100% ONLINE</span>
+              </div>
+
+              {inviteParamUser ? (
+                <div className="pt-2">
+                  <h2 className="text-xl font-bold text-white">
+                    @{inviteParamUser} te convidou para o LUNE!
+                  </h2>
+                  <p className="text-xs text-slate-300 mt-1 max-w-sm mx-auto">
+                    Crie sua conta em 10 segundos ou faça login para se conectar com @{inviteParamUser}, trocar mensagens privadas e compartilhar sua tela a 60 FPS.
+                  </p>
+                </div>
+              ) : (
+                <div className="pt-2">
+                  <h2 className="text-xl font-bold text-white">Rede Privada LUNE</h2>
+                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                    Mensagens diretas criptografadas, chamadas de voz e compartilhamento de tela com amigos.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-xs">
+              <LuneButton
+                variant="chrome"
+                className="w-full justify-center text-sm py-2.5 shadow-lg"
+                onClick={() => setIsAuthModalOpen(true)}
+              >
+                {inviteParamUser ? 'Aceitar Convite & Entrar' : 'Criar Conta / Entrar'}
+              </LuneButton>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 w-full pt-4 border-t border-white/5 text-[11px] text-slate-400">
+              <div className="p-2 rounded-xl bg-white/[0.02] border border-white/5">
+                <span className="text-emerald-400 font-bold block">P2P Mesh</span>
+                <span>WebRTC Direto</span>
+              </div>
+              <div className="p-2 rounded-xl bg-white/[0.02] border border-white/5">
+                <span className="text-indigo-400 font-bold block">E2EE</span>
+                <span>Criptografia</span>
+              </div>
+              <div className="p-2 rounded-xl bg-white/[0.02] border border-white/5">
+                <span className="text-white font-bold block">60 FPS</span>
+                <span>Stream Fluido</span>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* VIEW: STREAM & WEBRTC CALLS */}

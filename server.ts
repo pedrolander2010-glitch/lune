@@ -21,6 +21,10 @@ app.use(express.urlencoded({ extended: true, limit: '30mb' }));
 const connectedUsers = new Map<string, Set<WebSocket>>();
 const socketToUser = new Map<WebSocket, { userId: string; username: string; sessionId: string }>();
 
+// WebRTC Rooms for Screen Share & Group/Direct Voice/Video Mesh
+const rooms = new Map<string, Map<string, { ws: WebSocket; user: any }>>();
+const socketRooms = new Map<WebSocket, Set<string>>();
+
 // Simple rate limiter for sensitive endpoints
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 function checkRateLimit(key: string, maxAttempts = 10, windowMs = 60000): boolean {
@@ -530,6 +534,99 @@ app.get('/api/user/audit-logs', authMiddleware, (req: AuthRequest, res) => {
   });
 });
 
+// Server Health & Status Check
+app.get('/api/status', (req, res) => {
+  try {
+    const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as any)?.count || 0;
+    const onlineCount = (db.prepare("SELECT COUNT(*) as count FROM users WHERE presence = 'ONLINE' OR presence = 'STREAMING'").get() as any)?.count || 0;
+    const friendshipCount = (db.prepare("SELECT COUNT(*) as count FROM friendships WHERE status = 'ACCEPTED'").get() as any)?.count || 0;
+
+    res.json({
+      status: 'ONLINE',
+      serverTime: Date.now(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      database: 'HEALTHY',
+      registeredUsers: userCount,
+      onlineUsers: onlineCount,
+      friendships: friendshipCount,
+      activeConnections: connectedUsers.size,
+      activeRooms: rooms.size,
+      version: '1.4.0',
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'ERROR', error: String(err) });
+  }
+});
+
+// Search & Discover Users on Server
+app.get('/api/users/search', authMiddleware, (req: AuthRequest, res) => {
+  const query = String(req.query.q || '').trim().toLowerCase().replace(/^@/, '');
+  try {
+    let users: any[] = [];
+    if (query.length > 0) {
+      users = db.prepare(`
+        SELECT id, username, display_name, avatar, presence, custom_status, email
+        FROM users
+        WHERE id != ? AND (username LIKE ? OR display_name LIKE ? OR email LIKE ?)
+        LIMIT 25
+      `).all(req.user.id, `%${query}%`, `%${query}%`, `%${query}%`) as any[];
+    } else {
+      // List recent active users for discovery
+      users = db.prepare(`
+        SELECT id, username, display_name, avatar, presence, custom_status, email
+        FROM users
+        WHERE id != ?
+        ORDER BY updated_at DESC
+        LIMIT 20
+      `).all(req.user.id) as any[];
+    }
+
+    if (users.length === 0) {
+      return res.json({ users: [] });
+    }
+
+    const userIds = users.map((u) => u.id);
+    const placeholders = userIds.map(() => '?').join(',');
+
+    const friendships = db.prepare(`
+      SELECT user_a_id, user_b_id, status, action_user_id
+      FROM friendships
+      WHERE (user_a_id = ? AND user_b_id IN (${placeholders}))
+         OR (user_b_id = ? AND user_a_id IN (${placeholders}))
+    `).all(req.user.id, ...userIds, req.user.id, ...userIds) as any[];
+
+    const mapped = users.map((u) => {
+      const f = friendships.find((fs) =>
+        (fs.user_a_id === u.id && fs.user_b_id === req.user.id) ||
+        (fs.user_b_id === u.id && fs.user_a_id === req.user.id)
+      );
+      let relationship: 'NONE' | 'FRIENDS' | 'PENDING_SENT' | 'PENDING_RECEIVED' | 'BLOCKED' = 'NONE';
+      if (f) {
+        if (f.status === 'ACCEPTED') relationship = 'FRIENDS';
+        else if (f.status === 'BLOCKED') relationship = 'BLOCKED';
+        else if (f.status === 'PENDING') {
+          relationship = f.action_user_id === req.user.id ? 'PENDING_SENT' : 'PENDING_RECEIVED';
+        }
+      }
+
+      return {
+        id: u.id,
+        username: u.username,
+        displayName: u.display_name,
+        avatar: u.avatar,
+        presence: u.presence,
+        customStatus: u.custom_status,
+        relationship,
+      };
+    });
+
+    res.json({ users: mapped });
+  } catch (err) {
+    console.error('User search error:', err);
+    res.status(500).json({ error: 'SERVER_ERROR' });
+  }
+});
+
 // ======================== FRIEND SYSTEM ========================
 
 // List Friends
@@ -562,42 +659,84 @@ app.get('/api/friends', authMiddleware, (req: AuthRequest, res) => {
   }
 });
 
-// Send Friend Request
+// Send Friend Request (supports username or email, auto-accepts mutual requests)
 app.post('/api/friends/request', authMiddleware, (req: AuthRequest, res) => {
   const { username } = req.body;
   if (!username) {
-    return res.status(400).json({ error: 'USERNAME_REQUIRED' });
+    return res.status(400).json({ error: 'USERNAME_REQUIRED', message: 'Informe o @username ou e-mail do seu amigo.' });
   }
 
-  const cleanUsername = String(username).trim().toLowerCase().replace(/^@/, '');
-  if (cleanUsername === req.user.username.toLowerCase()) {
+  const cleanInput = String(username).trim().toLowerCase().replace(/^@/, '');
+  if (cleanInput === req.user.username.toLowerCase() || cleanInput === req.user.email?.toLowerCase()) {
     return res.status(400).json({ error: 'SELF_REQUEST', message: 'Você não pode adicionar a si mesmo.' });
   }
 
   try {
-    const targetUser = db.prepare('SELECT id, username, display_name FROM users WHERE username = ? COLLATE NOCASE').get(cleanUsername) as any;
+    // Find target user by username OR email
+    const targetUser = db.prepare(`
+      SELECT id, username, display_name, avatar, email
+      FROM users
+      WHERE username = ? COLLATE NOCASE OR email = ? COLLATE NOCASE
+    `).get(cleanInput, cleanInput) as any;
+
     if (!targetUser) {
-      return res.status(404).json({ error: 'USER_NOT_FOUND', message: `Usuário @${cleanUsername} não encontrado.` });
+      return res.status(404).json({
+        error: 'USER_NOT_FOUND',
+        message: `Usuário "${cleanInput}" não foi encontrado. Verifique a grafia ou convide seu amigo a criar uma conta no LUNE!`,
+      });
+    }
+
+    if (targetUser.id === req.user.id) {
+      return res.status(400).json({ error: 'SELF_REQUEST', message: 'Você não pode adicionar a si mesmo.' });
     }
 
     // Check existing friendship
     const [userA, userB] = req.user.id < targetUser.id ? [req.user.id, targetUser.id] : [targetUser.id, req.user.id];
     const existing = db.prepare('SELECT * FROM friendships WHERE user_a_id = ? AND user_b_id = ?').get(userA, userB) as any;
+    const now = Date.now();
 
     if (existing) {
       if (existing.status === 'ACCEPTED') {
-        return res.status(400).json({ error: 'ALREADY_FRIENDS', message: 'Vocês já são amigos.' });
+        return res.status(400).json({ error: 'ALREADY_FRIENDS', message: `Você e @${targetUser.username} já são amigos!` });
       }
       if (existing.status === 'BLOCKED') {
-        return res.status(400).json({ error: 'BLOCKED', message: 'Não é possível enviar pedido.' });
+        return res.status(400).json({ error: 'BLOCKED', message: 'Não é possível enviar pedido para este usuário.' });
       }
       if (existing.status === 'PENDING') {
-        return res.status(400).json({ error: 'PENDING_EXISTS', message: 'Pedido de amizade já pendente.' });
+        // If the other user already sent a pending request to ME: Mutual request -> AUTO-ACCEPT!
+        if (existing.action_user_id !== req.user.id) {
+          db.prepare("UPDATE friendships SET status = 'ACCEPTED', action_user_id = ?, updated_at = ? WHERE id = ?").run(req.user.id, now, existing.id);
+
+          // Create or ensure DM conversation exists
+          let conv = db.prepare(`
+            SELECT c.id FROM conversations c
+            JOIN conversation_members cm1 ON c.id = cm1.conversation_id AND cm1.user_id = ?
+            JOIN conversation_members cm2 ON c.id = cm2.conversation_id AND cm2.user_id = ?
+            WHERE c.type = 'DM'
+          `).get(req.user.id, targetUser.id) as { id: string } | undefined;
+
+          if (!conv) {
+            const convId = crypto.randomUUID();
+            db.prepare("INSERT INTO conversations (id, type, created_at, updated_at) VALUES (?, 'DM', ?, ?)").run(convId, now, now);
+            db.prepare("INSERT INTO conversation_members (conversation_id, user_id, role, joined_at, last_read_at) VALUES (?, ?, 'MEMBER', ?, ?), (?, ?, 'MEMBER', ?, ?)").run(convId, req.user.id, now, now, convId, targetUser.id, now, now);
+          }
+
+          sendToUser(targetUser.id, 'friend:accepted', { byUser: req.user });
+          return res.json({
+            success: true,
+            autoAccepted: true,
+            message: `Vocês se adicionaram mutuamente! Agora você e @${targetUser.username} são amigos!`,
+          });
+        } else {
+          return res.status(400).json({
+            error: 'PENDING_EXISTS',
+            message: `Pedido de amizade já enviado para @${targetUser.username}. Aguardando seu amigo aceitar na aba "Pendentes".`,
+          });
+        }
       }
     }
 
     const friendshipId = crypto.randomUUID();
-    const now = Date.now();
 
     db.prepare(`
       INSERT INTO friendships (id, user_a_id, user_b_id, status, action_user_id, created_at, updated_at)
@@ -605,7 +744,7 @@ app.post('/api/friends/request', authMiddleware, (req: AuthRequest, res) => {
       ON CONFLICT(user_a_id, user_b_id) DO UPDATE SET status = 'PENDING', action_user_id = ?, updated_at = ?
     `).run(friendshipId, userA, userB, req.user.id, now, now, req.user.id, now);
 
-    // Notify target user
+    // Notify target user in real time
     sendToUser(targetUser.id, 'friend:request', {
       fromUser: {
         id: req.user.id,
@@ -615,10 +754,10 @@ app.post('/api/friends/request', authMiddleware, (req: AuthRequest, res) => {
       },
     });
 
-    res.json({ success: true, message: `Pedido de amizade enviado para @${targetUser.username}!` });
+    res.json({ success: true, message: `Pedido de amizade enviado com sucesso para @${targetUser.username}!` });
   } catch (err) {
     console.error('Friend request error:', err);
-    res.status(500).json({ error: 'SERVER_ERROR' });
+    res.status(500).json({ error: 'SERVER_ERROR', message: 'Erro no servidor ao enviar pedido de amizade.' });
   }
 });
 
@@ -632,7 +771,7 @@ app.post('/api/friends/respond', authMiddleware, (req: AuthRequest, res) => {
   try {
     const friendship = db.prepare('SELECT * FROM friendships WHERE id = ?').get(friendshipId) as any;
     if (!friendship) {
-      return res.status(404).json({ error: 'NOT_FOUND' });
+      return res.status(404).json({ error: 'NOT_FOUND', message: 'Solicitação não encontrada.' });
     }
 
     const now = Date.now();
@@ -640,6 +779,21 @@ app.post('/api/friends/respond', authMiddleware, (req: AuthRequest, res) => {
 
     if (action === 'ACCEPT') {
       db.prepare("UPDATE friendships SET status = 'ACCEPTED', action_user_id = ?, updated_at = ? WHERE id = ?").run(req.user.id, now, friendshipId);
+
+      // Create or ensure DM conversation exists
+      let conv = db.prepare(`
+        SELECT c.id FROM conversations c
+        JOIN conversation_members cm1 ON c.id = cm1.conversation_id AND cm1.user_id = ?
+        JOIN conversation_members cm2 ON c.id = cm2.conversation_id AND cm2.user_id = ?
+        WHERE c.type = 'DM'
+      `).get(req.user.id, otherUserId) as { id: string } | undefined;
+
+      if (!conv) {
+        const convId = crypto.randomUUID();
+        db.prepare("INSERT INTO conversations (id, type, created_at, updated_at) VALUES (?, 'DM', ?, ?)").run(convId, now, now);
+        db.prepare("INSERT INTO conversation_members (conversation_id, user_id, role, joined_at, last_read_at) VALUES (?, ?, 'MEMBER', ?, ?), (?, ?, 'MEMBER', ?, ?)").run(convId, req.user.id, now, now, convId, otherUserId, now, now);
+      }
+
       sendToUser(otherUserId, 'friend:accepted', { byUser: req.user });
     } else if (action === 'DECLINE' || action === 'REMOVE') {
       db.prepare('DELETE FROM friendships WHERE id = ?').run(friendshipId);
@@ -649,6 +803,7 @@ app.post('/api/friends/respond', authMiddleware, (req: AuthRequest, res) => {
 
     res.json({ success: true });
   } catch (err) {
+    console.error('Friend respond error:', err);
     res.status(500).json({ error: 'SERVER_ERROR' });
   }
 });
@@ -1069,15 +1224,32 @@ wss.on('connection', (ws: WebSocket) => {
         // WebRTC Signaling for 1-to-1 Calls & Screen Sharing
         case 'call:initiate': {
           const client = socketToUser.get(ws);
-          if (client && payload?.targetUserId) {
-            sendToUser(payload.targetUserId, 'call:incoming', {
-              callId: payload.callId || crypto.randomUUID(),
-              fromUser: {
-                id: client.userId,
-                username: client.username,
-              },
-              conversationId: payload.conversationId,
-              type: payload.type || 'voice',
+          const targetUserId = payload?.targetUserId;
+          if (targetUserId) {
+            const senderUser = {
+              id: client?.userId || payload?.fromUser?.id || 'unknown',
+              name: client?.username || payload?.fromUser?.name || 'Amigo',
+              username: client?.username || payload?.fromUser?.username || 'amigo',
+              tag: `@${client?.username || payload?.fromUser?.username || 'amigo'}`,
+              avatarColor: '#d1d5db',
+            };
+            const callRoomId = payload?.roomId || `lune_call_${[senderUser.id, targetUserId].sort().join('_').slice(0, 16)}`;
+
+            sendToUser(targetUserId, 'call:incoming', {
+              callId: payload?.callId || crypto.randomUUID(),
+              fromUser: senderUser,
+              roomId: callRoomId,
+              type: payload?.type || 'voice',
+              timestamp: Date.now(),
+            });
+
+            // Also send alias 'incoming-call' for backwards compatibility
+            sendToUser(targetUserId, 'incoming-call', {
+              callId: payload?.callId || crypto.randomUUID(),
+              fromUser: senderUser,
+              roomId: callRoomId,
+              type: payload?.type || 'voice',
+              timestamp: Date.now(),
             });
           }
           break;
@@ -1114,12 +1286,115 @@ wss.on('connection', (ws: WebSocket) => {
           break;
         }
 
-        case 'webrtc:signal': {
+        // WebRTC Multi-user Rooms & Screen Share
+        case 'join-room': {
+          const { roomId, user } = payload || {};
+          if (!roomId || !user) break;
+
           const client = socketToUser.get(ws);
-          if (client && payload?.targetUserId) {
-            sendToUser(payload.targetUserId, 'webrtc:signal', {
-              fromUserId: client.userId,
-              signal: payload.signal,
+          const participantUser = {
+            id: user.id || client?.userId || crypto.randomUUID(),
+            name: user.name || client?.username || 'Participante',
+            tag: user.tag || `@${client?.username || 'user'}`,
+            avatarColor: user.avatarColor || '#d1d5db',
+          };
+
+          if (!rooms.has(roomId)) {
+            rooms.set(roomId, new Map());
+          }
+          const roomMap = rooms.get(roomId)!;
+
+          // Gather existing participants to return to joiner
+          const existingParticipants: any[] = [];
+          for (const [pId, pData] of roomMap.entries()) {
+            if (pId !== participantUser.id) {
+              existingParticipants.push(pData.user);
+            }
+          }
+
+          // Register in room
+          roomMap.set(participantUser.id, { ws, user: participantUser });
+
+          if (!socketRooms.has(ws)) {
+            socketRooms.set(ws, new Set());
+          }
+          socketRooms.get(ws)!.add(roomId);
+
+          // Confirm join to the calling client
+          ws.send(JSON.stringify({
+            type: 'joined-room-success',
+            payload: {
+              roomId,
+              participants: existingParticipants,
+            },
+          }));
+
+          // Notify existing participants in the room
+          for (const [pId, pData] of roomMap.entries()) {
+            if (pId !== participantUser.id && pData.ws.readyState === WebSocket.OPEN) {
+              pData.ws.send(JSON.stringify({
+                type: 'user-joined',
+                payload: { user: participantUser },
+              }));
+            }
+          }
+          break;
+        }
+
+        case 'leave-room': {
+          const clientRooms = socketRooms.get(ws);
+          if (clientRooms) {
+            for (const rId of clientRooms) {
+              const rMap = rooms.get(rId);
+              if (rMap) {
+                let leftUser: any = null;
+                for (const [uId, pData] of rMap.entries()) {
+                  if (pData.ws === ws) {
+                    leftUser = pData.user;
+                    rMap.delete(uId);
+                    break;
+                  }
+                }
+                if (leftUser) {
+                  for (const pData of rMap.values()) {
+                    if (pData.ws.readyState === WebSocket.OPEN) {
+                      pData.ws.send(JSON.stringify({
+                        type: 'user-left',
+                        payload: { userId: leftUser.id, user: leftUser },
+                      }));
+                    }
+                  }
+                }
+                if (rMap.size === 0) {
+                  rooms.delete(rId);
+                }
+              }
+            }
+            clientRooms.clear();
+          }
+          break;
+        }
+
+        // WebRTC Signaling (Offers, Answers, ICE Candidates)
+        case 'signal':
+        case 'webrtc:signal': {
+          const { toUserId, roomId, signalData, signal } = payload || {};
+          const client = socketToUser.get(ws);
+          const fromUser = payload?.fromUser || (client ? {
+            id: client.userId,
+            name: client.username,
+            tag: `@${client.username}`,
+            avatarColor: '#d1d5db',
+          } : null);
+
+          const actualSignal = signalData || signal;
+          if (toUserId && actualSignal) {
+            sendToUser(toUserId, 'signal', {
+              fromUser: fromUser || { id: client?.userId || 'peer' },
+              fromUserId: client?.userId || payload?.fromUser?.id,
+              signalData: actualSignal,
+              signal: actualSignal,
+              roomId,
             });
           }
           break;
@@ -1136,6 +1411,38 @@ wss.on('connection', (ws: WebSocket) => {
   });
 
   ws.on('close', () => {
+    // Cleanup WebRTC rooms
+    const clientRooms = socketRooms.get(ws);
+    if (clientRooms) {
+      for (const rId of clientRooms) {
+        const rMap = rooms.get(rId);
+        if (rMap) {
+          let leftUser: any = null;
+          for (const [uId, pData] of rMap.entries()) {
+            if (pData.ws === ws) {
+              leftUser = pData.user;
+              rMap.delete(uId);
+              break;
+            }
+          }
+          if (leftUser) {
+            for (const pData of rMap.values()) {
+              if (pData.ws.readyState === WebSocket.OPEN) {
+                pData.ws.send(JSON.stringify({
+                  type: 'user-left',
+                  payload: { userId: leftUser.id, user: leftUser },
+                }));
+              }
+            }
+          }
+          if (rMap.size === 0) {
+            rooms.delete(rId);
+          }
+        }
+      }
+      socketRooms.delete(ws);
+    }
+
     const client = socketToUser.get(ws);
     if (client) {
       const userSockets = connectedUsers.get(client.userId);
