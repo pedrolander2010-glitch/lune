@@ -40,7 +40,17 @@ import { LuneFriendsView } from './components/lune/LuneFriendsView';
 import { LuneChatView } from './components/lune/LuneChatView';
 import { LuneAvatar } from './components/lune/LuneAvatar';
 import { LuneButton } from './components/lune/LuneButton';
+import { BackendConfigNotice } from './components/lune/BackendConfigNotice';
 import { LUNE_LOGO_URL } from './utils/assets';
+import {
+  supabase,
+  isSupabaseConfigured,
+  mapProfileToLuneUser,
+  fetchUserConversations,
+  fetchUserSocialData,
+  getOrCreateDirectConversation,
+  ProfileRow,
+} from './lib/supabase';
 
 import {
   MessageSquare,
@@ -152,97 +162,111 @@ export default function App() {
       // ignore
     }
 
-    const token = localStorage.getItem('lune_session_token');
-    if (!token) {
+    if (!isSupabaseConfigured()) {
       setAuthChecking(false);
       return;
     }
 
-    fetch('/api/auth/me', {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.user) {
-          setLuneUser(data.user);
-        } else {
-          localStorage.removeItem('lune_session_token');
+    // Supabase Auth Session Initialization
+    const initAuthSession = async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (data?.session?.user) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', data.session.user.id)
+            .maybeSingle();
+
+          if (profile) {
+            setLuneUser(mapProfileToLuneUser(profile as ProfileRow, data.session.user.email));
+          }
         }
-      })
-      .catch(() => {
-        // network issue
-      })
-      .finally(() => {
+      } catch (err) {
+        console.error('Session initialization error:', err);
+      } finally {
         setAuthChecking(false);
-      });
+      }
+    };
+
+    initAuthSession();
+
+    // Listen to Supabase Auth State Changes
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session?.user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .maybeSingle();
+
+        if (profile) {
+          setLuneUser(mapProfileToLuneUser(profile as ProfileRow, session.user.email));
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setLuneUser(null);
+        setConversations([]);
+        setSelectedConversationId(null);
+      }
+    });
+
+    return () => {
+      authListener?.subscription.unsubscribe();
+    };
   }, []);
 
-  // 2. Fetch Conversations & Pending Friend Requests
+  // 2. Fetch Conversations & Pending Friend Requests from PostgreSQL
   const fetchConversations = useCallback(async () => {
-    const token = localStorage.getItem('lune_session_token');
-    if (!token) return;
+    if (!luneUser?.id || !isSupabaseConfigured()) return;
     try {
-      const res = await fetch('/api/conversations', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (res.ok && data.conversations) {
-        setConversations(data.conversations);
-        if (!selectedConversationId && data.conversations.length > 0) {
-          setSelectedConversationId(data.conversations[0].id);
-        }
+      const convs = await fetchUserConversations(luneUser.id);
+      setConversations(convs);
+      if (!selectedConversationId && convs.length > 0) {
+        setSelectedConversationId(convs[0].id);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('Error fetching conversations:', err);
     }
-  }, [selectedConversationId]);
+  }, [luneUser?.id, selectedConversationId]);
 
   const fetchPendingRequests = useCallback(async () => {
-    const token = localStorage.getItem('lune_session_token');
-    if (!token) return;
+    if (!luneUser?.id || !isSupabaseConfigured()) return;
     try {
-      const res = await fetch('/api/friends', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (res.ok && data.friends) {
-        const pendingIncoming = data.friends.filter(
-          (f: any) => f.status === 'PENDING' && f.isIncoming
-        ).length;
-        setPendingRequestsCount(pendingIncoming);
-      }
-    } catch {
-      // ignore
+      const social = await fetchUserSocialData(luneUser.id);
+      setPendingRequestsCount(social.incomingRequests.length);
+    } catch (err) {
+      console.error('Error fetching pending requests:', err);
     }
-  }, []);
+  }, [luneUser?.id]);
 
   useEffect(() => {
-    if (luneUser) {
+    if (luneUser?.id) {
       fetchConversations();
       fetchPendingRequests();
-      const interval = setInterval(() => {
-        fetchConversations();
-        fetchPendingRequests();
-      }, 5000);
-      return () => clearInterval(interval);
     }
-  }, [luneUser, fetchConversations, fetchPendingRequests]);
+  }, [luneUser?.id, fetchConversations, fetchPendingRequests]);
 
-  // 3. WebRTC Signal Sender wrapper
+  // 3. WebRTC Signal Sender using Supabase Realtime Broadcast
   const sendSignal = useCallback((toUserId: string, signalData: any) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && roomId) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'signal',
-          payload: {
-            toUserId,
-            roomId,
-            signalData,
+    if (roomId && isSupabaseConfigured()) {
+      const channel = supabase.channel(`lune-call-${roomId}`);
+      channel.send({
+        type: 'broadcast',
+        event: 'signal',
+        payload: {
+          toUserId,
+          roomId,
+          signalData,
+          fromUser: {
+            id: luneUser?.id || 'guest',
+            name: luneUser?.displayName || 'Convidado LUNE',
+            tag: `@${luneUser?.username || 'user'}`,
+            avatarColor: '#d1d5db',
           },
-        })
-      );
+        },
+      });
     }
-  }, [roomId]);
+  }, [roomId, luneUser]);
 
   // 4. Setup WebRTC Manager
   useEffect(() => {
@@ -306,115 +330,74 @@ export default function App() {
     };
   }, [sendSignal, settings.roomEncryptionKey, roomId, settings.soundAlertsEnabled, settings.soundVolume, settings.preferredFps, settings.preferredResolution]);
 
-  // 5. Connect WebSocket Realtime Engine
+  // 5. Connect Realtime Call & Room Subscriptions via Supabase
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}`);
-    wsRef.current = ws;
+    if (!luneUser?.id || !isSupabaseConfigured()) return;
 
-    ws.onopen = () => {
-      const token = localStorage.getItem('lune_session_token');
-      if (token) {
-        ws.send(JSON.stringify({ type: 'auth', payload: { token } }));
-      }
-      if (luneUser) {
-        ws.send(JSON.stringify({
-          type: 'set-identity',
-          payload: {
-            id: luneUser.id,
-            name: luneUser.displayName,
-            tag: `@${luneUser.username}`,
-            avatarColor: '#d1d5db',
-          },
-        }));
-      }
-    };
-
-    ws.onmessage = async (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        const { type, payload } = data;
-
-        switch (type) {
-          case 'message:new': {
-            fetchConversations();
-            if (settings.soundAlertsEnabled) playMessageSound(settings.soundVolume);
-            break;
-          }
-
-          case 'friend:request': {
-            fetchConversations();
-            showToast(`@${payload.fromUser.username} enviou uma solicitação de amizade!`);
-            if (settings.soundAlertsEnabled) playMessageSound(settings.soundVolume);
-            break;
-          }
-
-          case 'friend:accepted': {
-            fetchConversations();
-            showToast(`@${payload.byUser.username} aceitou sua solicitação!`);
-            break;
-          }
-
-          case 'call:incoming':
-          case 'incoming-call': {
-            const { fromUser, roomId: callRoomId, timestamp } = payload;
-            setIncomingCall({
-              fromUser: fromUser.tag ? fromUser : { id: fromUser.id, name: fromUser.username, tag: `@${fromUser.username}`, avatarColor: '#d1d5db' },
-              roomId: callRoomId || `lune_${fromUser.id.slice(0, 6)}`,
-              timestamp: timestamp || Date.now(),
-            });
-            break;
-          }
-
-          case 'joined-room-success': {
-            const { roomId: joinedRoomId, participants } = payload;
-            setRoomId(joinedRoomId);
-            if (webrtcManagerRef.current && participants) {
-              for (const peerUser of participants) {
-                webrtcManagerRef.current.createPeerConnection(peerUser, true);
-              }
-            }
-            if (settings.soundAlertsEnabled) playJoinSound(settings.soundVolume);
-            showToast(`Conectado à sala ${joinedRoomId}`);
-            break;
-          }
-
-          case 'user-joined': {
-            const { user: newUser } = payload;
-            if (webrtcManagerRef.current) {
-              webrtcManagerRef.current.createPeerConnection(newUser, false);
-            }
-            if (settings.soundAlertsEnabled) playJoinSound(settings.soundVolume);
-            showToast(`${newUser.name} entrou na chamada`);
-            break;
-          }
-
-          case 'user-left': {
-            const { userId, user: leftUser } = payload;
-            if (webrtcManagerRef.current) {
-              webrtcManagerRef.current.removePeer(userId);
-            }
-            showToast(`${leftUser?.name || 'Um participante'} saiu`);
-            break;
-          }
-
-          case 'signal': {
-            const { fromUser, signalData } = payload;
-            if (webrtcManagerRef.current) {
-              webrtcManagerRef.current.handleSignal(fromUser, signalData);
-            }
-            break;
-          }
-        }
-      } catch (e) {
-        console.error('Error handling WS:', e);
-      }
-    };
+    // Direct alerts channel for incoming calls
+    const alertChannel = supabase.channel(`lune-user-alerts-${luneUser.id}`);
+    alertChannel
+      .on('broadcast', { event: 'incoming-call' }, ({ payload }) => {
+        const { fromUser, roomId: callRoomId, timestamp } = payload;
+        setIncomingCall({
+          fromUser: fromUser.tag ? fromUser : { id: fromUser.id, name: fromUser.username, tag: `@${fromUser.username}`, avatarColor: '#d1d5db' },
+          roomId: callRoomId || `lune_${fromUser.id.slice(0, 6)}`,
+          timestamp: timestamp || Date.now(),
+        });
+        if (settings.soundAlertsEnabled) playMessageSound(settings.soundVolume);
+      })
+      .subscribe();
 
     return () => {
-      ws.close();
+      supabase.removeChannel(alertChannel);
     };
-  }, [luneUser, fetchConversations, settings.soundAlertsEnabled, settings.soundVolume]);
+  }, [luneUser?.id, settings.soundAlertsEnabled, settings.soundVolume]);
+
+  // WebRTC Room Channel
+  useEffect(() => {
+    if (!roomId || !isSupabaseConfigured()) return;
+
+    const roomChannel = supabase.channel(`lune-call-${roomId}`);
+    roomChannel
+      .on('broadcast', { event: 'signal' }, ({ payload }) => {
+        if (payload.toUserId === luneUser?.id && webrtcManagerRef.current) {
+          webrtcManagerRef.current.handleSignal(payload.fromUser, payload.signalData);
+        }
+      })
+      .on('broadcast', { event: 'user-joined' }, ({ payload }) => {
+        if (payload.user.id !== luneUser?.id && webrtcManagerRef.current) {
+          webrtcManagerRef.current.createPeerConnection(payload.user, false);
+          if (settings.soundAlertsEnabled) playJoinSound(settings.soundVolume);
+          showToast(`${payload.user.name} entrou na chamada`);
+        }
+      })
+      .on('broadcast', { event: 'user-left' }, ({ payload }) => {
+        if (webrtcManagerRef.current) {
+          webrtcManagerRef.current.removePeer(payload.userId);
+        }
+        showToast(`${payload.userName || 'Um participante'} saiu`);
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          roomChannel.send({
+            type: 'broadcast',
+            event: 'user-joined',
+            payload: {
+              user: {
+                id: luneUser?.id || 'guest',
+                name: luneUser?.displayName || 'Convidado LUNE',
+                tag: `@${luneUser?.username || 'user'}`,
+                avatarColor: '#d1d5db',
+              },
+            },
+          });
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(roomChannel);
+    };
+  }, [roomId, luneUser, settings.soundAlertsEnabled, settings.soundVolume]);
 
   // Compute safety fingerprint
   useEffect(() => {
@@ -426,29 +409,23 @@ export default function App() {
     if (passKey) {
       setSettings((prev) => ({ ...prev, roomEncryptionKey: passKey }));
     }
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'join-room',
-          payload: {
-            roomId: targetRoomId,
-            user: {
-              id: luneUser?.id || 'guest',
-              name: luneUser?.displayName || 'Convidado LUNE',
-              tag: `@${luneUser?.username || 'user'}`,
-              avatarColor: '#d1d5db',
-            },
-          },
-        })
-      );
-    }
+    setRoomId(targetRoomId);
     setCurrentNav('STREAM');
   };
 
   const handleLeaveRoom = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'leave-room' }));
+    if (roomId && isSupabaseConfigured()) {
+      const roomChannel = supabase.channel(`lune-call-${roomId}`);
+      roomChannel.send({
+        type: 'broadcast',
+        event: 'user-left',
+        payload: {
+          userId: luneUser?.id || 'guest',
+          userName: luneUser?.displayName || 'Um participante',
+        },
+      });
     }
+
     if (webrtcManagerRef.current) {
       webrtcManagerRef.current.stopScreenShare();
       setIsScreenSharing(false);
@@ -510,68 +487,71 @@ export default function App() {
 
   const handleStartCallWithUser = (targetUserId: string, type: 'voice' | 'video') => {
     const callRoom = `lune_call_${[luneUser?.id, targetUserId].sort().join('_').slice(0, 16)}`;
+    
+    // Send direct call invitation to target user over their personal alerts channel
+    if (isSupabaseConfigured() && luneUser) {
+      const alertChannel = supabase.channel(`lune-user-alerts-${targetUserId}`);
+      alertChannel.send({
+        type: 'broadcast',
+        event: 'incoming-call',
+        payload: {
+          fromUser: {
+            id: luneUser.id,
+            name: luneUser.displayName,
+            tag: `@${luneUser.username}`,
+            avatarColor: '#d1d5db',
+          },
+          roomId: callRoom,
+          timestamp: Date.now(),
+        },
+      });
+    }
+
     handleJoinRoom(callRoom);
     showToast(`Iniciando chamada ${type === 'video' ? 'de vídeo' : 'de voz'}...`);
   };
 
   const handleOpenConversationWithUser = async (targetUserId: string) => {
-    const token = localStorage.getItem('lune_session_token');
-    if (!token) return;
+    if (!isSupabaseConfigured() || !luneUser) return;
     try {
-      const res = await fetch('/api/conversations/dm', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ targetUserId }),
-      });
-      const data = await res.json();
-      if (res.ok && data.conversationId) {
+      const convId = await getOrCreateDirectConversation(targetUserId);
+      if (convId) {
         await fetchConversations();
-        setSelectedConversationId(data.conversationId);
+        setSelectedConversationId(convId);
         setCurrentNav('CHATS');
       }
-    } catch {
-      // ignore
+    } catch (err: any) {
+      console.error('Failed to open conversation:', err);
+      showToast(err?.message || 'Erro ao abrir conversa.');
     }
   };
 
   const handleUpdatePresence = async (newPresence: LunePresence) => {
     setShowPresenceMenu(false);
-    if (!luneUser) return;
-    const token = localStorage.getItem('lune_session_token');
-    if (!token) return;
+    if (!luneUser || !isSupabaseConfigured()) return;
 
     try {
-      const res = await fetch('/api/user/profile', {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ presence: newPresence }),
-      });
-      if (res.ok) {
-        setLuneUser((prev) => (prev ? { ...prev, presence: newPresence } : null));
-        showToast(`Status alterado para ${newPresence}`);
-      }
+      await supabase
+        .from('profiles')
+        .update({
+          presence_status: newPresence,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', luneUser.id);
+
+      setLuneUser((prev) => (prev ? { ...prev, presence: newPresence } : null));
+      showToast(`Status alterado para ${newPresence}`);
     } catch {
       // ignore
     }
   };
 
   const handleLogout = async () => {
-    const token = localStorage.getItem('lune_session_token');
-    if (token) {
+    if (isSupabaseConfigured()) {
       try {
-        await fetch('/api/auth/logout', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        await supabase.auth.signOut();
       } catch {}
     }
-    localStorage.removeItem('lune_session_token');
     setLuneUser(null);
     setConversations([]);
     setSelectedConversationId(null);
@@ -590,6 +570,10 @@ export default function App() {
       (other && other.username.toLowerCase().includes(q))
     );
   });
+
+  if (!isSupabaseConfigured()) {
+    return <BackendConfigNotice />;
+  }
 
   return (
     <div className="flex flex-col md:flex-row h-screen h-[100dvh] w-screen bg-[#060608] text-slate-100 overflow-hidden font-sans antialiased">

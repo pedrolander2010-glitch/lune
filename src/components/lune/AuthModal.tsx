@@ -2,14 +2,20 @@ import React, { useState } from 'react';
 import { LuneModal } from './LuneModal';
 import { LuneInput } from './LuneInput';
 import { LuneButton } from './LuneButton';
-import { Lock, Mail, User, KeyRound, Sparkles, LogIn, UserPlus } from 'lucide-react';
+import { Lock, Mail, User, KeyRound, Sparkles, LogIn, UserPlus, ShieldCheck } from 'lucide-react';
 import { LuneUser } from '../../types';
 import { LUNE_LOGO_URL } from '../../utils/assets';
+import {
+  supabase,
+  isSupabaseConfigured,
+  mapProfileToLuneUser,
+  ProfileRow,
+} from '../../lib/supabase';
 
 export interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (user: LuneUser, token: string) => void;
+  onSuccess: (user: LuneUser) => void;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess }) => {
@@ -19,37 +25,83 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // Form Fields
-  const [loginInput, setLoginInput] = useState('');
+  const [emailInput, setEmailInput] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
-  const [email, setEmail] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    if (!isSupabaseConfigured()) {
+      setError('O backend remoto do Supabase não está configurado.');
+      return;
+    }
+
+    const cleanEmail = emailInput.trim();
+    if (!cleanEmail || !password) {
+      setError('Por favor, informe seu e-mail e senha.');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ login: loginInput, password }),
+      // 1. Supabase Auth Sign In
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: password,
       });
-      const data = await res.json();
 
-      if (!res.ok) {
-        setError(data.message || 'Falha ao autenticar.');
+      if (authError || !data.user) {
+        if (authError?.message?.includes('Invalid login credentials')) {
+          setError('Credenciais inválidas. Verifique seu e-mail e senha.');
+        } else if (authError?.message?.includes('Email not confirmed')) {
+          setError('E-mail não confirmado. Verifique sua caixa de entrada.');
+        } else {
+          setError(authError?.message || 'Falha ao autenticar.');
+        }
         setLoading(false);
         return;
       }
 
-      localStorage.setItem('lune_session_token', data.token);
-      onSuccess(data.user, data.token);
-      onClose();
-    } catch {
-      setError('Erro de conexão com o servidor.');
+      // 2. Fetch User Profile
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .maybeSingle();
+
+      if (profileError || !profileData) {
+        // Create initial profile if trigger did not fire
+        const fallbackUsername = cleanEmail.split('@')[0].toLowerCase().replace(/[^a-z0-9_.]/g, '');
+        const { data: newProfile } = await supabase
+          .from('profiles')
+          .insert({
+            id: data.user.id,
+            username: fallbackUsername,
+            username_normalized: fallbackUsername,
+            display_name: fallbackUsername,
+            avatar_url: LUNE_LOGO_URL,
+            presence_status: 'ONLINE',
+          })
+          .select('*')
+          .single();
+
+        if (newProfile) {
+          onSuccess(mapProfileToLuneUser(newProfile as ProfileRow, data.user.email));
+          onClose();
+        } else {
+          setError('Perfil de usuário não encontrado.');
+        }
+      } else {
+        onSuccess(mapProfileToLuneUser(profileData as ProfileRow, data.user.email));
+        onClose();
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Erro de conexão com o servidor.');
     } finally {
       setLoading(false);
     }
@@ -59,63 +111,142 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
     e.preventDefault();
     setError(null);
 
+    if (!isSupabaseConfigured()) {
+      setError('O backend remoto do Supabase não está configurado.');
+      return;
+    }
+
+    const cleanUsername = username.trim().toLowerCase().replace(/^@/, '');
+    const cleanDisplay = displayName.trim();
+    const cleanEmail = emailInput.trim();
+
+    if (!cleanUsername || cleanUsername.length < 3 || cleanUsername.length > 24) {
+      setError('O @username deve ter entre 3 e 24 caracteres.');
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9_.]+$/.test(cleanUsername)) {
+      setError('O @username pode conter apenas letras, números, ponto (.) e underline (_).');
+      return;
+    }
+
+    if (!cleanDisplay || cleanDisplay.length > 32) {
+      setError('O nome de exibição deve ter entre 1 e 32 caracteres.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setError('A senha deve ter no mínimo 6 caracteres.');
+      return;
+    }
+
     if (password !== confirmPassword) {
       setError('As senhas não conferem.');
       return;
     }
 
     setLoading(true);
-    try {
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          displayName,
-          username,
-          email,
-          password,
-          avatar: LUNE_LOGO_URL,
-        }),
-      });
-      const data = await res.json();
 
-      if (!res.ok) {
-        setError(data.message || 'Falha ao registrar conta.');
+    try {
+      // 1. Check if username is already taken in PostgreSQL
+      const { data: existingUser } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('username_normalized', cleanUsername)
+        .maybeSingle();
+
+      if (existingUser) {
+        setError(`O @username "${cleanUsername}" já está em uso por outro usuário.`);
         setLoading(false);
         return;
       }
 
-      localStorage.setItem('lune_session_token', data.token);
-      onSuccess(data.user, data.token);
+      // 2. Supabase Auth Sign Up
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password: password,
+        options: {
+          data: {
+            username: cleanUsername,
+            display_name: cleanDisplay,
+            avatar_url: LUNE_LOGO_URL,
+          },
+        },
+      });
+
+      if (signUpError || !data.user) {
+        setError(signUpError?.message || 'Falha ao registrar conta no Supabase.');
+        setLoading(false);
+        return;
+      }
+
+      // 3. Upsert Profile Row to guarantee consistency
+      const { data: profile, error: insertError } = await supabase
+        .from('profiles')
+        .upsert({
+          id: data.user.id,
+          username: cleanUsername,
+          username_normalized: cleanUsername,
+          display_name: cleanDisplay,
+          avatar_url: LUNE_LOGO_URL,
+          presence_status: 'ONLINE',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .select('*')
+        .single();
+
+      if (insertError) {
+        console.warn('Profile creation warning:', insertError);
+      }
+
+      if (profile) {
+        onSuccess(mapProfileToLuneUser(profile as ProfileRow, data.user.email));
+      } else {
+        onSuccess({
+          id: data.user.id,
+          username: cleanUsername,
+          displayName: cleanDisplay,
+          email: cleanEmail,
+          avatar: LUNE_LOGO_URL,
+          presence: 'ONLINE',
+          role: 'USER',
+          createdAt: new Date().toISOString(),
+        });
+      }
+
       onClose();
-    } catch {
-      setError('Erro de conexão com o servidor.');
+    } catch (err: any) {
+      setError(err?.message || 'Erro inesperado ao criar conta.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDemoLogin = async (userLogin: string, pass: string) => {
-    setLoginInput(userLogin);
-    setPassword(pass);
-    setLoading(true);
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
     setError(null);
+    setSuccessMsg(null);
+
+    const cleanEmail = emailInput.trim();
+    if (!cleanEmail) {
+      setError('Informe seu e-mail cadastrado.');
+      return;
+    }
+
+    setLoading(true);
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ login: userLogin, password: pass }),
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+        redirectTo: window.location.origin + window.location.pathname,
       });
-      const data = await res.json();
-      if (res.ok) {
-        localStorage.setItem('lune_session_token', data.token);
-        onSuccess(data.user, data.token);
-        onClose();
+
+      if (resetError) {
+        setError(resetError.message);
       } else {
-        setError(data.message || 'Erro ao entrar.');
+        setSuccessMsg('E-mail de recuperação enviado! Verifique sua caixa de entrada.');
       }
-    } catch {
-      setError('Falha na autenticação.');
+    } catch (err: any) {
+      setError(err?.message || 'Erro ao solicitar recuperação.');
     } finally {
       setLoading(false);
     }
@@ -135,21 +266,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       }
       description={
         mode === 'LOGIN'
-          ? 'Conecte-se à sua conta para conversar com amigos'
+          ? 'Conecte-se com sua conta para conversar com amigos'
           : mode === 'REGISTER'
-          ? 'Escolha seu @username único e entre na plataforma'
-          : 'Instruções para redefinir suas credenciais'
+          ? 'Crie seu perfil com @username único persistido em nuvem'
+          : 'Enviaremos instruções de redefinição para seu e-mail'
       }
       icon={<img src={LUNE_LOGO_URL} alt="LUNE" className="w-6 h-6 object-contain" />}
     >
       {error && (
-        <div className="p-3 mb-4 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-medium">
+        <div className="p-3 mb-4 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-medium text-left">
           {error}
         </div>
       )}
 
       {successMsg && (
-        <div className="p-3 mb-4 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-medium">
+        <div className="p-3 mb-4 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-medium text-left">
           {successMsg}
         </div>
       )}
@@ -157,11 +288,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       {mode === 'LOGIN' && (
         <form onSubmit={handleLogin} className="space-y-4">
           <LuneInput
-            label="E-mail ou @username"
-            placeholder="ex: @lander ou pedro@lune.chat"
-            value={loginInput}
-            onChange={(e) => setLoginInput(e.target.value)}
-            leftIcon={<User className="w-4 h-4" />}
+            label="E-mail de Acesso"
+            type="email"
+            placeholder="seu@email.com"
+            value={emailInput}
+            onChange={(e) => setEmailInput(e.target.value)}
+            leftIcon={<Mail className="w-4 h-4" />}
             required
           />
 
@@ -178,7 +310,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           <div className="flex items-center justify-between text-xs">
             <button
               type="button"
-              onClick={() => setMode('FORGOT')}
+              onClick={() => {
+                setMode('FORGOT');
+                setError(null);
+                setSuccessMsg(null);
+              }}
               className="text-slate-400 hover:text-white transition"
             >
               Esqueceu sua senha?
@@ -188,6 +324,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
               onClick={() => {
                 setMode('REGISTER');
                 setError(null);
+                setSuccessMsg(null);
               }}
               className="text-slate-300 hover:text-white font-semibold underline underline-offset-4"
             >
@@ -200,27 +337,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             Entrar no LUNE
           </LuneButton>
 
-          {/* Quick Demo Credentials */}
-          <div className="pt-3 border-t border-white/10 space-y-2 text-left">
-            <span className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
-              Acesso Rápido de Demonstração:
+          <div className="pt-2 text-center">
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+              <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
+              Autenticação Segura via Supabase Auth
             </span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => handleDemoLogin('lander', 'lander123')}
-                className="flex-1 py-1.5 px-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-[11px] text-slate-300 hover:text-white hover:bg-white/10 transition"
-              >
-                @lander (Admin)
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDemoLogin('lune_cat', 'lander123')}
-                className="flex-1 py-1.5 px-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-[11px] text-slate-300 hover:text-white hover:bg-white/10 transition"
-              >
-                @lune_cat (Bot)
-              </button>
-            </div>
           </div>
         </form>
       )}
@@ -238,9 +359,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
           <LuneInput
             label="Username Único (@username)"
-            placeholder="lander"
+            placeholder="ex: pedro ou carlos"
             value={username}
-            onChange={(e) => setUsername(e.target.value)}
+            onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, ''))}
             leftIcon={<span className="text-sm font-bold text-slate-400">@</span>}
             helperText="Único e case-insensitive (ex: @lander e @Lander são idênticos)."
             required
@@ -250,8 +371,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             label="E-mail"
             type="email"
             placeholder="seu@email.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            value={emailInput}
+            onChange={(e) => setEmailInput(e.target.value)}
             leftIcon={<Mail className="w-4 h-4" />}
             required
           />
@@ -283,6 +404,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
               onClick={() => {
                 setMode('LOGIN');
                 setError(null);
+                setSuccessMsg(null);
               }}
               className="text-slate-400 hover:text-white transition"
             >
@@ -298,36 +420,39 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
       )}
 
       {mode === 'FORGOT' && (
-        <div className="space-y-4 text-left">
+        <form onSubmit={handleForgotPassword} className="space-y-4 text-left">
           <p className="text-xs text-slate-300 leading-relaxed">
-            Como o LUNE é uma rede privada para amigos, você pode redefinir sua senha diretamente com seu administrador local ou utilizando seu Security PIN configurado.
+            Informe o e-mail associado à sua conta LUNE. Enviaremos um link seguro para você redefinir sua senha.
           </p>
           <LuneInput
             label="Seu E-mail Cadastrado"
+            type="email"
             placeholder="seu@email.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            value={emailInput}
+            onChange={(e) => setEmailInput(e.target.value)}
             leftIcon={<Mail className="w-4 h-4" />}
+            required
           />
           <LuneButton
-            type="button"
+            type="submit"
             variant="obsidian"
-            className="w-full"
-            onClick={() => {
-              setSuccessMsg('Solicitação registrada. Solicite aprovação ao administrador do LUNE.');
-              setTimeout(() => setMode('LOGIN'), 2500);
-            }}
+            loading={loading}
+            className="w-full py-2.5"
           >
-            Solicitar Redefinição
+            Enviar Link de Redefinição
           </LuneButton>
           <button
             type="button"
-            onClick={() => setMode('LOGIN')}
+            onClick={() => {
+              setMode('LOGIN');
+              setError(null);
+              setSuccessMsg(null);
+            }}
             className="text-xs text-slate-400 hover:text-white transition block text-center w-full"
           >
             Voltar para Login
           </button>
-        </div>
+        </form>
       )}
     </LuneModal>
   );

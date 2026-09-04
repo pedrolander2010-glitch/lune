@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { LuneAvatar } from './LuneAvatar';
 import { LuneButton } from './LuneButton';
 import { LuneInput } from './LuneInput';
@@ -15,39 +15,32 @@ import {
   Sparkles,
   Copy,
   CheckCheck,
-  Server,
-  Activity,
-  Globe,
   RefreshCw,
+  UserCheck,
+  UserX,
+  Clock,
+  Ban,
 } from 'lucide-react';
 import { LuneFriend, LuneUser } from '../../types';
+import {
+  supabase,
+  isSupabaseConfigured,
+  fetchUserSocialData,
+  searchProfilesByUsername,
+  sendFriendRequest,
+  acceptFriendRequestRpc,
+  updateFriendRequestStatus,
+  removeFriendRpc,
+  blockUser,
+  unblockUser,
+} from '../../lib/supabase';
 
 export interface LuneFriendsViewProps {
   currentUser: LuneUser;
   onOpenConversation: (targetUserId: string) => void;
   onStartCall: (targetUserId: string, type: 'voice' | 'video') => void;
   initialAddUsername?: string;
-}
-
-interface ServerStatusInfo {
-  status: string;
-  uptimeSeconds: number;
-  registeredUsers: number;
-  onlineUsers: number;
-  activeConnections: number;
-  activeRooms: number;
-  database: string;
-  version: string;
-}
-
-interface DiscoveredUser {
-  id: string;
-  username: string;
-  displayName: string;
-  avatar: string;
-  presence: string;
-  customStatus?: string;
-  relationship: 'NONE' | 'FRIENDS' | 'PENDING_SENT' | 'PENDING_RECEIVED' | 'BLOCKED';
+  onPendingCountChange?: (count: number) => void;
 }
 
 export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
@@ -55,681 +48,744 @@ export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
   onOpenConversation,
   onStartCall,
   initialAddUsername,
+  onPendingCountChange,
 }) => {
   const [activeTab, setActiveTab] = useState<'ONLINE' | 'ALL' | 'PENDING' | 'BLOCKED' | 'ADD'>('ONLINE');
   const [friends, setFriends] = useState<LuneFriend[]>([]);
+  const [incomingRequests, setIncomingRequests] = useState<LuneFriend[]>([]);
+  const [outgoingRequests, setOutgoingRequests] = useState<LuneFriend[]>([]);
+  const [blockedUsers, setBlockedUsers] = useState<LuneFriend[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Search in friend list
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Global Add Friend Directory Search
   const [addUsernameInput, setAddUsernameInput] = useState(initialAddUsername || '');
-  const [addLoading, setAddLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState<LuneUser[]>([]);
+  const [searchingGlobal, setSearchingGlobal] = useState(false);
   const [addMsg, setAddMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [copiedInvite, setCopiedInvite] = useState(false);
 
-  // Server Status & Live Discovery
-  const [serverStatus, setServerStatus] = useState<ServerStatusInfo | null>(null);
-  const [discoveredUsers, setDiscoveredUsers] = useState<DiscoveredUser[]>([]);
-  const [discoveryQuery, setDiscoveryQuery] = useState('');
-  const [loadingDiscovery, setLoadingDiscovery] = useState(false);
-  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const token = localStorage.getItem('lune_session_token');
-
-  // Fetch Friends List
-  const fetchFriends = useCallback(async () => {
-    if (!token) return;
-    try {
-      const res = await fetch('/api/friends', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setFriends(data.friends || []);
-      }
-    } catch {
-      // ignore
+  // 1. Fetch Remote Social Data from PostgreSQL
+  const loadSocialData = useCallback(async () => {
+    if (!isSupabaseConfigured() || !currentUser?.id) {
+      setLoading(false);
+      return;
     }
-  }, [token]);
 
-  // Fetch Server Health & Status
-  const fetchServerStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/status');
-      if (res.ok) {
-        const data = await res.json();
-        setServerStatus(data);
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
+      const data = await fetchUserSocialData(currentUser.id);
+      setFriends(data.friends);
+      setIncomingRequests(data.incomingRequests);
+      setOutgoingRequests(data.outgoingRequests);
+      setBlockedUsers(data.blockedUsers);
 
-  // Fetch Users on Server for Discovery
-  const fetchDiscoveredUsers = useCallback(async (q: string = '') => {
-    if (!token) return;
-    setLoadingDiscovery(true);
-    try {
-      const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setDiscoveredUsers(data.users || []);
+      if (onPendingCountChange) {
+        onPendingCountChange(data.incomingRequests.length);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('Failed to load social data:', err);
     } finally {
-      setLoadingDiscovery(false);
+      setLoading(false);
     }
-  }, [token]);
+  }, [currentUser?.id, onPendingCountChange]);
 
   useEffect(() => {
-    fetchFriends();
-    fetchServerStatus();
-    const interval = setInterval(() => {
-      fetchFriends();
-      fetchServerStatus();
-    }, 6000);
-    return () => clearInterval(interval);
-  }, [fetchFriends, fetchServerStatus]);
+    loadSocialData();
+  }, [loadSocialData]);
 
+  // 2. Realtime Subscriptions for Friend Requests & Friendships
   useEffect(() => {
-    if (activeTab === 'ADD') {
-      fetchDiscoveredUsers(discoveryQuery);
+    if (!isSupabaseConfigured() || !currentUser?.id) return;
+
+    const channel = supabase
+      .channel(`social-updates-${currentUser.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'friend_requests',
+        },
+        () => {
+          loadSocialData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'friendships',
+        },
+        () => {
+          loadSocialData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentUser?.id, loadSocialData]);
+
+  // 3. Debounced Global Search in Remote PostgreSQL Profiles
+  useEffect(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
     }
-  }, [activeTab, discoveryQuery, fetchDiscoveredUsers]);
 
-  const handleSendFriendRequest = async (e?: React.FormEvent, targetUsername?: string) => {
-    if (e) e.preventDefault();
-    const toSend = targetUsername || addUsernameInput.trim();
-    if (!toSend) return;
+    const clean = addUsernameInput.trim();
+    if (!clean || clean.length < 2) {
+      setSearchResults([]);
+      setSearchingGlobal(false);
+      return;
+    }
 
-    setAddLoading(true);
+    setSearchingGlobal(true);
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await searchProfilesByUsername(clean, currentUser.id);
+        setSearchResults(results);
+      } catch (err) {
+        console.error('Search error:', err);
+      } finally {
+        setSearchingGlobal(false);
+      }
+    }, 350);
+
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [addUsernameInput, currentUser.id]);
+
+  // 4. Send Friend Request
+  const handleSendFriendRequest = async (targetUser: LuneUser) => {
+    setActionInProgress(targetUser.id);
     setAddMsg(null);
-    setActionInProgress(toSend);
 
-    try {
-      const res = await fetch('/api/friends/request', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ username: toSend }),
+    const res = await sendFriendRequest(currentUser.id, targetUser.id);
+    if (res.success) {
+      setAddMsg({
+        type: 'success',
+        text: `Solicitação de amizade enviada para @${targetUser.username}!`,
       });
-      const data = await res.json();
-
-      if (!res.ok) {
-        setAddMsg({ type: 'error', text: data.message || 'Erro ao enviar pedido de amizade.' });
-        return;
-      }
-
-      setAddMsg({ type: 'success', text: data.message || 'Pedido processado com sucesso!' });
-      if (!targetUsername) {
-        setAddUsernameInput('');
-      }
-      fetchFriends();
-      fetchDiscoveredUsers(discoveryQuery);
-    } catch {
-      setAddMsg({ type: 'error', text: 'Falha de conexão com o servidor. Tente novamente.' });
-    } finally {
-      setAddLoading(false);
-      setActionInProgress(null);
+      loadSocialData();
+    } else {
+      setAddMsg({
+        type: 'error',
+        text: res.error || 'Não foi possível enviar a solicitação.',
+      });
     }
+    setActionInProgress(null);
   };
 
-  const handleRespond = async (friendshipId: string, action: 'ACCEPT' | 'DECLINE' | 'BLOCK' | 'REMOVE') => {
-    try {
-      const res = await fetch('/api/friends/respond', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ friendshipId, action }),
-      });
-      if (res.ok) {
-        fetchFriends();
-        fetchDiscoveredUsers(discoveryQuery);
-      }
-    } catch {
-      // ignore
+  // 5. Accept Friend Request
+  const handleAcceptRequest = async (requestId: string) => {
+    setActionInProgress(requestId);
+    const res = await acceptFriendRequestRpc(requestId);
+    if (res.success) {
+      loadSocialData();
+    } else {
+      alert(res.error || 'Erro ao aceitar pedido.');
     }
+    setActionInProgress(null);
   };
 
+  // 6. Decline Friend Request
+  const handleDeclineRequest = async (requestId: string) => {
+    setActionInProgress(requestId);
+    await updateFriendRequestStatus(requestId, 'declined');
+    loadSocialData();
+    setActionInProgress(null);
+  };
+
+  // 7. Cancel Outgoing Friend Request
+  const handleCancelRequest = async (requestId: string) => {
+    setActionInProgress(requestId);
+    await updateFriendRequestStatus(requestId, 'cancelled');
+    loadSocialData();
+    setActionInProgress(null);
+  };
+
+  // 8. Remove Friend
+  const handleRemoveFriend = async (targetUserId: string) => {
+    if (!window.confirm('Tem certeza que deseja desfazer a amizade?')) return;
+    setActionInProgress(targetUserId);
+    await removeFriendRpc(targetUserId);
+    loadSocialData();
+    setActionInProgress(null);
+  };
+
+  // 9. Block User
+  const handleBlockUser = async (targetUserId: string) => {
+    if (!window.confirm('Bloquear este usuário? Ele não poderá enviar mensagens ou solicitações.')) return;
+    setActionInProgress(targetUserId);
+    await blockUser(currentUser.id, targetUserId);
+    loadSocialData();
+    setActionInProgress(null);
+  };
+
+  // 10. Unblock User
+  const handleUnblockUser = async (targetUserId: string) => {
+    setActionInProgress(targetUserId);
+    await unblockUser(currentUser.id, targetUserId);
+    loadSocialData();
+    setActionInProgress(null);
+  };
+
+  // Copy Profile Invite Link
   const handleCopyInviteLink = () => {
-    const inviteUrl = `${window.location.origin}/?invite=${currentUser.username}`;
+    const inviteUrl = `${window.location.origin}${window.location.pathname}?invite=@${currentUser.username}`;
     navigator.clipboard.writeText(inviteUrl);
     setCopiedInvite(true);
     setTimeout(() => setCopiedInvite(false), 2500);
   };
 
-  const pendingList = friends.filter((f) => f.status === 'PENDING');
-  const acceptedList = friends.filter((f) => f.status === 'ACCEPTED');
-  const onlineList = acceptedList.filter((f) => f.presence === 'ONLINE' || f.presence === 'STREAMING');
-  const blockedList = friends.filter((f) => f.status === 'BLOCKED');
-
-  const filteredAccepted = acceptedList.filter((f) => {
+  // Filtered Friends List
+  const filteredFriends = friends.filter((f) => {
+    if (activeTab === 'ONLINE' && f.presence === 'OFFLINE') return false;
+    if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
-    return (
-      f.displayName.toLowerCase().includes(q) ||
-      f.username.toLowerCase().includes(q)
-    );
-  });
-
-  const filteredOnline = onlineList.filter((f) => {
-    const q = searchQuery.toLowerCase();
-    return (
-      f.displayName.toLowerCase().includes(q) ||
-      f.username.toLowerCase().includes(q)
-    );
+    return f.username.toLowerCase().includes(q) || f.displayName.toLowerCase().includes(q);
   });
 
   return (
-    <div className="flex flex-col h-full w-full bg-[#08080a]/60 backdrop-blur-2xl">
-      {/* Top Bar with Navigation Tabs, Server Health Pill & Friend Search */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between p-3 sm:p-4 border-b border-white/[0.08] gap-3 shrink-0">
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar scroll-smooth pb-1 sm:pb-0 shrink-0 w-full sm:w-auto">
+    <div className="flex-1 flex flex-col h-full bg-[#07070a]/90 text-slate-100 overflow-hidden select-none">
+      {/* Top Header & Tab Navigation */}
+      <div className="h-16 px-4 sm:px-6 border-b border-white/10 flex items-center justify-between bg-[#0a0a0f]/80 backdrop-blur-xl shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-300">
+            <Users className="w-4 h-4" />
+          </div>
+          <h2 className="text-sm sm:text-base font-bold tracking-tight text-white">Amigos</h2>
+        </div>
+
+        {/* Navigation Tabs */}
+        <div className="flex items-center gap-1 sm:gap-2 overflow-x-auto py-1">
           <button
-            type="button"
             onClick={() => setActiveTab('ONLINE')}
-            className={`px-3.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 active:scale-95 transition ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 ${
               activeTab === 'ONLINE'
-                ? 'bg-white/15 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-white/15 text-white border border-white/20'
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            Disponíveis ({onlineList.length})
+            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+            Online
+            <span className="text-[10px] opacity-70">
+              ({friends.filter((f) => f.presence !== 'OFFLINE').length})
+            </span>
           </button>
+
           <button
-            type="button"
             onClick={() => setActiveTab('ALL')}
-            className={`px-3.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 active:scale-95 transition ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
               activeTab === 'ALL'
-                ? 'bg-white/15 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-white/15 text-white border border-white/20'
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            Todos ({acceptedList.length})
+            Todos
+            <span className="ml-1 text-[10px] opacity-70">({friends.length})</span>
           </button>
+
           <button
-            type="button"
             onClick={() => setActiveTab('PENDING')}
-            className={`px-3.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 active:scale-95 transition ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition relative flex items-center gap-1.5 ${
               activeTab === 'PENDING'
-                ? 'bg-white/15 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-white/15 text-white border border-white/20'
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
             Pendentes
-            {pendingList.length > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-emerald-400 text-black text-[10px] font-bold animate-pulse">
-                {pendingList.length}
+            {incomingRequests.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-indigo-500 text-white text-[10px] font-bold animate-pulse">
+                {incomingRequests.length}
               </span>
             )}
           </button>
+
           <button
-            type="button"
             onClick={() => setActiveTab('BLOCKED')}
-            className={`px-3.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 active:scale-95 transition ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
               activeTab === 'BLOCKED'
-                ? 'bg-white/15 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-white/15 text-white border border-white/20'
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            Bloqueados ({blockedList.length})
+            Bloqueados
           </button>
+
           <button
-            type="button"
             onClick={() => setActiveTab('ADD')}
-            className={`px-3.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 active:scale-95 transition ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 ${
               activeTab === 'ADD'
-                ? 'bg-white text-black shadow-sm font-bold'
-                : 'bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/30'
+                ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/25'
+                : 'bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/30'
             }`}
           >
-            <UserPlus className="w-3.5 h-3.5" /> Adicionar Amigo
+            <UserPlus className="w-3.5 h-3.5" />
+            Adicionar Amigo
           </button>
-        </div>
-
-        {/* Server Status Pill */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-          <div className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300 shrink-0">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="font-semibold">Servidor Online</span>
-            {serverStatus && (
-              <span className="text-[10px] text-emerald-400/80 font-mono hidden md:inline">
-                • {serverStatus.registeredUsers} usuários
-              </span>
-            )}
-          </div>
-
-          {activeTab !== 'ADD' && (
-            <div className="relative w-full sm:w-56 mt-1 sm:mt-0">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Buscar em amigos..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-8 pr-3 py-2 sm:py-1.5 text-xs rounded-xl bg-white/[0.04] border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-white/30"
-              />
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Main Friends View Content */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-4 pb-24 md:pb-6 custom-scrollbar">
-        {/* TAB: ADD FRIEND */}
+      {/* Main View Body */}
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+        {/* ADD FRIEND TAB */}
         {activeTab === 'ADD' && (
-          <div className="max-w-2xl mx-auto space-y-6 pt-2 text-left">
-            {/* Header & Server Online Confirmation */}
-            <div className="p-4 rounded-2xl bg-gradient-to-r from-indigo-900/20 via-white/[0.02] to-transparent border border-indigo-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="max-w-2xl mx-auto space-y-6 text-left">
+            <div className="p-5 rounded-2xl bg-[#0e0f18]/80 border border-white/10 space-y-4 backdrop-blur-xl">
               <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
-                    Servidores LUNE 100% Ativos & Conectados
-                  </span>
-                </div>
-                <h3 className="text-sm font-semibold text-white">
-                  Conecte-se e converse em tempo real com seus amigos
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <UserPlus className="w-4 h-4 text-indigo-400" />
+                  Diretório Global de Usuários LUNE
                 </h3>
-                <p className="text-[11px] text-slate-400">
-                  Adicione pelo identificador único, envie seu link direto ou adicione usuários cadastrados abaixo.
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Pesquise pelo <strong className="text-indigo-300">@username</strong> exato para encontrar qualquer usuário cadastrado no servidor compartilhado.
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleCopyInviteLink}
-                className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-white text-black hover:bg-slate-200 text-xs font-bold transition shadow-lg shrink-0"
-              >
-                {copiedInvite ? (
-                  <>
-                    <CheckCheck className="w-4 h-4 text-emerald-600" />
-                    <span>Link Copiado!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4" />
-                    <span>Copiar Link de Convite</span>
-                  </>
+              {/* Search Input */}
+              <div className="relative">
+                <LuneInput
+                  label="Buscar por @username ou Nome"
+                  placeholder="ex: pedro, carlos, lander..."
+                  value={addUsernameInput}
+                  onChange={(e) => setAddUsernameInput(e.target.value)}
+                  leftIcon={<Search className="w-4 h-4" />}
+                />
+                {searchingGlobal && (
+                  <div className="absolute right-3 top-9">
+                    <RefreshCw className="w-4 h-4 text-indigo-400 animate-spin" />
+                  </div>
                 )}
-              </button>
-            </div>
+              </div>
 
-            {/* Notifications / Feedback Messages */}
-            {addMsg && (
-              <div
-                className={`p-3.5 rounded-xl border text-xs flex items-center justify-between ${
-                  addMsg.type === 'success'
-                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
-                    : 'bg-red-500/15 border-red-500/30 text-red-300'
-                }`}
-              >
-                <span>{addMsg.text}</span>
-                <button
-                  type="button"
-                  onClick={() => setAddMsg(null)}
-                  className="text-xs opacity-70 hover:opacity-100 ml-2"
+              {addMsg && (
+                <div
+                  className={`p-3 rounded-xl text-xs font-medium ${
+                    addMsg.type === 'success'
+                      ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-300'
+                      : 'bg-red-500/15 border border-red-500/30 text-red-300'
+                  }`}
                 >
-                  ✕
-                </button>
-              </div>
-            )}
+                  {addMsg.text}
+                </div>
+              )}
 
-            {/* Manual Friend Input Form */}
-            <form onSubmit={handleSendFriendRequest} className="space-y-2">
-              <label className="text-xs font-semibold text-slate-200 block">
-                Adicionar por @username ou e-mail:
-              </label>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <div className="relative flex-1">
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-mono text-sm text-slate-400 font-semibold">
-                    @
+              {/* Search Results */}
+              {searchResults.length > 0 && (
+                <div className="space-y-2 pt-2 border-t border-white/10">
+                  <span className="text-[11px] uppercase font-bold text-slate-400 tracking-wider">
+                    Usuários Encontrados no Servidor ({searchResults.length})
                   </span>
-                  <input
-                    type="text"
-                    placeholder="Digite ex: lander, carlos ou o e-mail do seu amigo"
-                    value={addUsernameInput}
-                    onChange={(e) => setAddUsernameInput(e.target.value)}
-                    className="w-full pl-8 pr-3 py-3 rounded-xl bg-white/[0.04] border border-white/15 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-400 shadow-inner"
-                    required
-                  />
-                </div>
-                <LuneButton
-                  type="submit"
-                  variant="chrome"
-                  size="md"
-                  loading={addLoading}
-                  disabled={!addUsernameInput.trim()}
-                  className="w-full sm:w-auto shrink-0 min-h-[44px]"
-                >
-                  Enviar Pedido
-                </LuneButton>
-              </div>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-slate-400 pt-1 gap-1">
-                <span>
-                  Seu @username para amigos te adicionarem:{' '}
-                  <strong className="text-white font-mono">@{currentUser.username}</strong>
-                </span>
-                <span>(Não diferencia maiúsculas)</span>
-              </div>
-            </form>
+                  <div className="space-y-2">
+                    {searchResults.map((user) => {
+                      const isAlreadyFriend = friends.some((f) => f.userId === user.id);
+                      const isPendingSent = outgoingRequests.some((r) => r.userId === user.id);
+                      const isPendingReceived = incomingRequests.some((r) => r.userId === user.id);
 
-            {/* Live Server Directory & Discovery */}
-            <div className="space-y-3 pt-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Globe className="w-4 h-4 text-indigo-400" />
-                  <span className="text-xs font-bold text-white uppercase tracking-wider">
-                    Usuários Cadastrados no Servidor
-                  </span>
-                </div>
-                <div className="relative w-48">
-                  <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    placeholder="Filtrar usuários..."
-                    value={discoveryQuery}
-                    onChange={(e) => setDiscoveryQuery(e.target.value)}
-                    className="w-full pl-7 pr-2 py-1 text-[11px] rounded-lg bg-white/[0.04] border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-white/30"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                {loadingDiscovery ? (
-                  <div className="py-8 text-center text-xs text-slate-400">
-                    <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-2 text-indigo-400" />
-                    Buscando contas no servidor...
-                  </div>
-                ) : discoveredUsers.length === 0 ? (
-                  <div className="p-6 text-center text-xs text-slate-400 bg-white/[0.02] border border-white/5 rounded-2xl">
-                    Nenhum outro usuário encontrado. Compartilhe seu link de convite com seu amigo!
-                  </div>
-                ) : (
-                  discoveredUsers.map((u) => {
-                    // Check if there is an incoming pending request from this user
-                    const incomingPending = pendingList.find(
-                      (p) => p.userId === u.id && p.isIncoming
-                    );
-
-                    return (
-                      <div
-                        key={u.id}
-                        className="p-3 rounded-2xl bg-white/[0.02] border border-white/5 hover:border-white/15 flex items-center justify-between transition"
-                      >
-                        <div className="flex items-center gap-3">
-                          <LuneAvatar
-                            src={u.avatar}
-                            name={u.displayName}
-                            status={u.presence as any}
-                            size="md"
-                          />
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-semibold text-white">
-                                {u.displayName}
-                              </span>
-                              <span className="text-xs text-slate-400 font-mono">
-                                @{u.username}
-                              </span>
+                      return (
+                        <div
+                          key={user.id}
+                          className="flex items-center justify-between p-3 rounded-xl bg-white/[0.04] border border-white/10 hover:border-white/20 transition"
+                        >
+                          <div className="flex items-center gap-3">
+                            <LuneAvatar
+                              src={user.avatar}
+                              alt={user.displayName}
+                              size="md"
+                              presence={user.presence}
+                            />
+                            <div>
+                              <div className="font-semibold text-sm text-white">
+                                {user.displayName}
+                              </div>
+                              <div className="text-xs text-indigo-400 font-mono">
+                                @{user.username}
+                              </div>
                             </div>
-                            {u.customStatus ? (
-                              <p className="text-[11px] text-slate-400">{u.customStatus}</p>
+                          </div>
+
+                          <div>
+                            {isAlreadyFriend ? (
+                              <span className="px-2.5 py-1 rounded-lg bg-white/10 text-xs font-semibold text-slate-300 flex items-center gap-1">
+                                <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
+                                Amigos
+                              </span>
+                            ) : isPendingSent ? (
+                              <span className="px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/30 text-xs font-semibold text-amber-300 flex items-center gap-1">
+                                <Clock className="w-3.5 h-3.5" />
+                                Pedido Enviado
+                              </span>
+                            ) : isPendingReceived ? (
+                              <LuneButton
+                                size="sm"
+                                variant="chrome"
+                                onClick={() => setActiveTab('PENDING')}
+                              >
+                                Ver Solicitação
+                              </LuneButton>
                             ) : (
-                              <p className="text-[10px] text-slate-500">Membro da rede LUNE</p>
+                              <LuneButton
+                                size="sm"
+                                variant="chrome"
+                                loading={actionInProgress === user.id}
+                                onClick={() => handleSendFriendRequest(user)}
+                              >
+                                <UserPlus className="w-3.5 h-3.5 mr-1" />
+                                Adicionar
+                              </LuneButton>
                             )}
                           </div>
                         </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
-                        <div>
-                          {u.relationship === 'FRIENDS' ? (
-                            <div className="flex items-center gap-2">
-                              <span className="text-[11px] text-emerald-400 font-semibold px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-                                Amigos ✓
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => onOpenConversation(u.id)}
-                                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
-                                title="Abrir Conversa"
-                              >
-                                <MessageSquare className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          ) : incomingPending ? (
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => handleRespond(incomingPending.id, 'ACCEPT')}
-                                className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-500 text-black text-xs font-bold hover:bg-emerald-400 transition shadow-sm"
-                              >
-                                <Check className="w-3.5 h-3.5" /> Aceitar Pedido
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRespond(incomingPending.id, 'DECLINE')}
-                                className="p-1.5 rounded-xl bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-300 transition"
-                                title="Recusar"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          ) : u.relationship === 'PENDING_SENT' ? (
-                            <span className="text-[11px] text-amber-300 font-semibold px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20">
-                              Pedido Enviado...
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleSendFriendRequest(undefined, u.username)}
-                              disabled={actionInProgress === u.username}
-                              className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white text-slate-200 hover:text-black text-xs font-semibold transition shadow-sm"
-                            >
-                              <UserPlus className="w-3.5 h-3.5" />
-                              {actionInProgress === u.username ? 'Adicionando...' : 'Adicionar'}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
+              {addUsernameInput.trim().length >= 2 && !searchingGlobal && searchResults.length === 0 && (
+                <div className="p-4 text-center text-xs text-slate-400">
+                  Nenhum usuário encontrado com "{addUsernameInput}". Verifique o @username exato.
+                </div>
+              )}
+            </div>
+
+            {/* Invite Link Generator */}
+            <div className="p-5 rounded-2xl bg-[#0e0f18]/80 border border-white/10 space-y-3 backdrop-blur-xl">
+              <div className="space-y-1">
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-purple-400" />
+                  Seu Link de Convite Direto
+                </h4>
+                <p className="text-xs text-slate-400">
+                  Compartilhe este link com seus amigos para que eles caiam diretamente na tela de solicitação.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="flex-1 p-2.5 rounded-xl bg-black/60 border border-white/10 text-xs text-slate-300 font-mono truncate select-all">
+                  {window.location.origin}{window.location.pathname}?invite=@{currentUser.username}
+                </div>
+                <LuneButton
+                  variant="obsidian"
+                  size="sm"
+                  onClick={handleCopyInviteLink}
+                  className="shrink-0"
+                >
+                  {copiedInvite ? (
+                    <>
+                      <CheckCheck className="w-3.5 h-3.5 mr-1 text-emerald-400" />
+                      Copiado!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 mr-1" />
+                      Copiar Link
+                    </>
+                  )}
+                </LuneButton>
               </div>
             </div>
           </div>
         )}
 
-        {/* TAB: PENDING REQUESTS */}
+        {/* PENDING TAB */}
         {activeTab === 'PENDING' && (
-          <div className="space-y-3 max-w-2xl mx-auto">
-            {pendingList.length === 0 ? (
-              <div className="py-16 text-center text-xs text-slate-400 border border-white/5 rounded-2xl">
-                Nenhum pedido de amizade pendente no momento.
-              </div>
-            ) : (
-              pendingList.map((f) => (
-                <div
-                  key={f.id}
-                  className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between hover:border-white/20 transition"
-                >
-                  <div className="flex items-center gap-3">
-                    <LuneAvatar
-                      src={f.avatar}
-                      name={f.displayName}
-                      status={f.presence}
-                      size="md"
-                    />
-                    <div className="text-left">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-white">
-                          {f.displayName}
-                        </span>
-                        <span className="text-xs text-slate-400 font-mono">
-                          @{f.username}
-                        </span>
-                      </div>
-                      <span className="text-[11px] text-slate-400">
-                        {f.isIncoming ? 'Quer ser seu amigo' : 'Pedido de amizade enviado'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {f.isIncoming ? (
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleRespond(f.id, 'ACCEPT')}
-                        className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold flex items-center gap-1.5 transition shadow-sm"
-                        title="Aceitar Pedido"
-                      >
-                        <Check className="w-3.5 h-3.5" /> Aceitar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRespond(f.id, 'DECLINE')}
-                        className="p-2 rounded-xl bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-300 transition"
-                        title="Recusar"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => handleRespond(f.id, 'DECLINE')}
-                      className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-slate-400 hover:text-white transition"
-                    >
-                      Cancelar Pedido
-                    </button>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        )}
-
-        {/* TAB: ONLINE & ALL FRIENDS */}
-        {(activeTab === 'ONLINE' || activeTab === 'ALL') && (
-          <div className="space-y-2 max-w-3xl mx-auto">
-            {((activeTab === 'ONLINE' ? filteredOnline : filteredAccepted).length === 0) ? (
-              <div className="py-16 text-center text-xs text-slate-400 border border-white/5 rounded-2xl space-y-3">
-                <p>
-                  {activeTab === 'ONLINE'
-                    ? 'Nenhum amigo online agora.'
-                    : 'Você ainda não possui amigos adicionados.'}
-                </p>
+          <div className="max-w-2xl mx-auto space-y-6 text-left">
+            {/* Incoming Requests */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                  Solicitações Recebidas ({incomingRequests.length})
+                </span>
                 <button
-                  type="button"
-                  onClick={() => setActiveTab('ADD')}
-                  className="px-4 py-2 rounded-xl bg-white text-black hover:bg-slate-200 text-xs font-bold transition inline-flex items-center gap-1.5 shadow-lg"
+                  onClick={loadSocialData}
+                  className="text-slate-400 hover:text-white transition"
+                  title="Atualizar"
                 >
-                  <UserPlus className="w-4 h-4" /> Adicionar Amigo ou Convidar
+                  <RefreshCw className="w-3.5 h-3.5" />
                 </button>
               </div>
-            ) : (
-              (activeTab === 'ONLINE' ? filteredOnline : filteredAccepted).map((f) => (
-                <div
-                  key={f.id}
-                  className="p-3.5 rounded-2xl bg-white/[0.02] border border-white/5 hover:border-white/15 hover:bg-white/[0.04] flex items-center justify-between transition group"
-                >
-                  <div className="flex items-center gap-3">
-                    <LuneAvatar
-                      src={f.avatar}
-                      name={f.displayName}
-                      status={f.presence}
-                      size="md"
-                    />
-                    <div className="text-left">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-white group-hover:text-slate-100 transition">
-                          {f.displayName}
-                        </span>
-                        <span className="text-xs text-slate-400 font-mono">
-                          @{f.username}
-                        </span>
-                      </div>
-                      {f.customStatus && (
-                        <p className="text-[11px] text-slate-400 mt-0.5 max-w-md truncate">
-                          {f.customStatus}
-                        </p>
-                      )}
-                    </div>
-                  </div>
 
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onOpenConversation(f.userId)}
-                      className="p-2.5 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-white transition"
-                      title="Abrir Chat Privado"
-                    >
-                      <MessageSquare className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onStartCall(f.userId, 'voice')}
-                      className="p-2.5 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-white transition"
-                      title="Iniciar Chamada de Voz"
-                    >
-                      <Phone className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onStartCall(f.userId, 'video')}
-                      className="p-2.5 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-white transition"
-                      title="Chamada de Vídeo / Compartilhar Tela"
-                    >
-                      <Video className="w-4 h-4" />
-                    </button>
-                  </div>
+              {incomingRequests.length === 0 ? (
+                <div className="p-6 rounded-2xl bg-white/[0.02] border border-white/10 text-center text-xs text-slate-400">
+                  Nenhuma solicitação de amizade pendente no momento.
                 </div>
-              ))
+              ) : (
+                <div className="space-y-2">
+                  {incomingRequests.map((req) => (
+                    <div
+                      key={req.id}
+                      className="flex items-center justify-between p-3.5 rounded-xl bg-[#0d0e17] border border-indigo-500/20 hover:border-indigo-500/40 transition"
+                    >
+                      <div className="flex items-center gap-3">
+                        <LuneAvatar
+                          src={req.avatar}
+                          alt={req.displayName}
+                          size="md"
+                          presence={req.presence}
+                        />
+                        <div>
+                          <div className="font-semibold text-sm text-white">
+                            {req.displayName}
+                          </div>
+                          <div className="text-xs text-indigo-400 font-mono">
+                            @{req.username}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <LuneButton
+                          size="sm"
+                          variant="chrome"
+                          loading={actionInProgress === req.id}
+                          onClick={() => handleAcceptRequest(req.id)}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white"
+                        >
+                          <Check className="w-3.5 h-3.5 mr-1" />
+                          Aceitar
+                        </LuneButton>
+                        <LuneButton
+                          size="sm"
+                          variant="obsidian"
+                          loading={actionInProgress === req.id}
+                          onClick={() => handleDeclineRequest(req.id)}
+                        >
+                          <X className="w-3.5 h-3.5 mr-1" />
+                          Recusar
+                        </LuneButton>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Outgoing Requests */}
+            <div className="space-y-3 pt-4 border-t border-white/10">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                Solicitações Enviadas ({outgoingRequests.length})
+              </span>
+
+              {outgoingRequests.length === 0 ? (
+                <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 text-center text-xs text-slate-400">
+                  Você não enviou nenhuma solicitação pendente.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {outgoingRequests.map((req) => (
+                    <div
+                      key={req.id}
+                      className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03] border border-white/10"
+                    >
+                      <div className="flex items-center gap-3">
+                        <LuneAvatar
+                          src={req.avatar}
+                          alt={req.displayName}
+                          size="sm"
+                          presence={req.presence}
+                        />
+                        <div>
+                          <div className="font-semibold text-sm text-white">
+                            {req.displayName}
+                          </div>
+                          <div className="text-xs text-slate-400 font-mono">
+                            @{req.username}
+                          </div>
+                        </div>
+                      </div>
+
+                      <LuneButton
+                        size="sm"
+                        variant="obsidian"
+                        loading={actionInProgress === req.id}
+                        onClick={() => handleCancelRequest(req.id)}
+                      >
+                        Cancelar
+                      </LuneButton>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* BLOCKED TAB */}
+        {activeTab === 'BLOCKED' && (
+          <div className="max-w-2xl mx-auto space-y-3 text-left">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+              Usuários Bloqueados ({blockedUsers.length})
+            </span>
+
+            {blockedUsers.length === 0 ? (
+              <div className="p-6 rounded-2xl bg-white/[0.02] border border-white/10 text-center text-xs text-slate-400">
+                Nenhum usuário bloqueado.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {blockedUsers.map((user) => (
+                  <div
+                    key={user.id}
+                    className="flex items-center justify-between p-3.5 rounded-xl bg-white/[0.03] border border-white/10"
+                  >
+                    <div className="flex items-center gap-3">
+                      <LuneAvatar src={user.avatar} alt={user.displayName} size="md" />
+                      <div>
+                        <div className="font-semibold text-sm text-white">
+                          {user.displayName}
+                        </div>
+                        <div className="text-xs text-slate-400 font-mono">
+                          @{user.username}
+                        </div>
+                      </div>
+                    </div>
+
+                    <LuneButton
+                      size="sm"
+                      variant="obsidian"
+                      loading={actionInProgress === user.id}
+                      onClick={() => handleUnblockUser(user.userId)}
+                    >
+                      Desbloquear
+                    </LuneButton>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}
 
-        {/* TAB: BLOCKED */}
-        {activeTab === 'BLOCKED' && (
-          <div className="space-y-3 max-w-2xl mx-auto">
-            {blockedList.length === 0 ? (
-              <div className="py-16 text-center text-xs text-slate-400 border border-white/5 rounded-2xl">
-                Você não possui contatos bloqueados.
+        {/* ONLINE & ALL FRIENDS TABS */}
+        {(activeTab === 'ONLINE' || activeTab === 'ALL') && (
+          <div className="max-w-4xl mx-auto space-y-4">
+            {/* Search filter in friends */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex-1 max-w-sm">
+                <LuneInput
+                  placeholder="Filtrar amigos..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  leftIcon={<Search className="w-3.5 h-3.5" />}
+                />
+              </div>
+
+              <LuneButton
+                size="sm"
+                variant="obsidian"
+                onClick={loadSocialData}
+                className="shrink-0"
+              >
+                <RefreshCw className="w-3.5 h-3.5 mr-1" />
+                Atualizar
+              </LuneButton>
+            </div>
+
+            {loading ? (
+              <div className="p-12 text-center text-xs text-slate-400">
+                <RefreshCw className="w-5 h-5 text-indigo-400 animate-spin mx-auto mb-2" />
+                Carregando amigos do servidor...
+              </div>
+            ) : filteredFriends.length === 0 ? (
+              <div className="p-12 rounded-2xl bg-white/[0.02] border border-white/10 text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto">
+                  <Users className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-white">
+                    {activeTab === 'ONLINE'
+                      ? 'Nenhum amigo online no momento.'
+                      : 'Você ainda não possui amigos adicionados.'}
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    Acesse a aba <strong>Adicionar Amigo</strong> para pesquisar @usernames e enviar solicitações.
+                  </p>
+                </div>
+                <LuneButton
+                  variant="chrome"
+                  size="sm"
+                  onClick={() => setActiveTab('ADD')}
+                  className="mx-auto"
+                >
+                  <UserPlus className="w-3.5 h-3.5 mr-1" />
+                  Pesquisar Usuários
+                </LuneButton>
               </div>
             ) : (
-              blockedList.map((f) => (
-                <div
-                  key={f.id}
-                  className="p-3.5 rounded-2xl bg-white/[0.02] border border-white/5 flex items-center justify-between"
-                >
-                  <div className="flex items-center gap-3">
-                    <LuneAvatar
-                      src={f.avatar}
-                      name={f.displayName}
-                      status="OFFLINE"
-                      size="md"
-                    />
-                    <div className="text-left">
-                      <span className="text-sm font-semibold text-slate-300">
-                        {f.displayName}
-                      </span>
-                      <span className="text-xs text-slate-500 font-mono block">
-                        @{f.username}
-                      </span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {filteredFriends.map((friend) => (
+                  <div
+                    key={friend.id}
+                    className="flex items-center justify-between p-3.5 rounded-2xl bg-[#0c0d15]/80 border border-white/10 hover:border-white/20 transition backdrop-blur-xl group"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <LuneAvatar
+                        src={friend.avatar}
+                        alt={friend.displayName}
+                        size="md"
+                        presence={friend.presence}
+                      />
+                      <div className="min-w-0 text-left">
+                        <div className="font-semibold text-sm text-white truncate flex items-center gap-1.5">
+                          {friend.displayName}
+                        </div>
+                        <div className="text-xs text-indigo-400 font-mono truncate">
+                          @{friend.username}
+                        </div>
+                        {friend.customStatus && (
+                          <div className="text-[11px] text-slate-400 truncate mt-0.5">
+                            {friend.customStatus}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Action Controls */}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        onClick={() => onOpenConversation(friend.userId)}
+                        className="p-2 rounded-xl bg-white/[0.06] hover:bg-indigo-500/20 text-slate-300 hover:text-white border border-white/10 transition"
+                        title="Abrir Chat Privado"
+                      >
+                        <MessageSquare className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        onClick={() => onStartCall(friend.userId, 'voice')}
+                        className="p-2 rounded-xl bg-white/[0.06] hover:bg-emerald-500/20 text-slate-300 hover:text-white border border-white/10 transition"
+                        title="Chamada de Voz"
+                      >
+                        <Phone className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        onClick={() => onStartCall(friend.userId, 'video')}
+                        className="p-2 rounded-xl bg-white/[0.06] hover:bg-purple-500/20 text-slate-300 hover:text-white border border-white/10 transition"
+                        title="Chamada de Vídeo"
+                      >
+                        <Video className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        onClick={() => handleRemoveFriend(friend.userId)}
+                        className="p-2 rounded-xl bg-white/[0.06] hover:bg-red-500/20 text-slate-400 hover:text-red-300 border border-white/10 transition"
+                        title="Desfazer Amizade"
+                      >
+                        <UserX className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
-                  <LuneButton
-                    type="button"
-                    variant="obsidian"
-                    size="sm"
-                    onClick={() => handleRespond(f.id, 'REMOVE')}
-                  >
-                    Desbloquear
-                  </LuneButton>
-                </div>
-              ))
+                ))}
+              </div>
             )}
           </div>
         )}
@@ -737,4 +793,3 @@ export const LuneFriendsView: React.FC<LuneFriendsViewProps> = ({
     </div>
   );
 };
-

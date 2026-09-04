@@ -3,6 +3,7 @@ import { LuneModal } from './LuneModal';
 import { LuneButton } from './LuneButton';
 import { Smartphone, Monitor, Globe, ShieldAlert, LogOut, CheckCircle, RefreshCw } from 'lucide-react';
 import { LuneSession } from '../../types';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 
 export interface SessionsModalProps {
   isOpen: boolean;
@@ -20,18 +21,25 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
   const [actionLoading, setActionLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  const token = localStorage.getItem('lune_session_token');
-
   const fetchSessions = async () => {
-    if (!token) return;
+    if (!isSupabaseConfigured()) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/sessions', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSessions(data.sessions || []);
+      const { data } = await supabase.auth.getSession();
+      if (data.session) {
+        const isMobile = /mobile|iphone|ipad|android/i.test(navigator.userAgent);
+        const currentSession: LuneSession = {
+          id: data.session.access_token.slice(-16),
+          userId: data.session.user.id,
+          deviceName: navigator.userAgent.split(') ')[0]?.split('; ')[1] || 'Web Browser',
+          platform: isMobile ? 'mobile' : 'desktop',
+          browser: navigator.userAgent.split(') ')[0]?.split('; ')[1] || 'Web Browser',
+          ip: 'Nuvem Supabase Auth',
+          lastActiveAt: new Date().toISOString(),
+          createdAt: data.session.user.created_at || new Date().toISOString(),
+          isCurrent: true,
+        };
+        setSessions([currentSession]);
       }
     } catch {
       // ignore
@@ -47,21 +55,12 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
   }, [isOpen]);
 
   const handleRevokeOthers = async () => {
-    if (!token) return;
+    if (!isSupabaseConfigured()) return;
     setActionLoading(true);
     try {
-      const res = await fetch('/api/auth/sessions/revoke', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ revokeOthers: true }),
-      });
-      if (res.ok) {
-        setMsg('Todas as outras sessões foram desconectadas.');
-        fetchSessions();
-      }
+      await supabase.auth.signOut({ scope: 'others' });
+      setMsg('Todas as outras sessões foram desconectadas na nuvem.');
+      fetchSessions();
     } catch {
       // ignore
     } finally {
@@ -70,32 +69,18 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
   };
 
   const handleRevokeSingle = async (sessionId: string) => {
-    if (!token) return;
-    try {
-      const res = await fetch('/api/auth/sessions/revoke', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ targetSessionId: sessionId }),
-      });
-      if (res.ok) {
-        setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-      }
-    } catch {
-      // ignore
+    if (onLoggedOutCurrent) {
+      await supabase.auth.signOut();
+      onLoggedOutCurrent();
+      onClose();
     }
   };
 
-  const getDeviceIcon = (platform: string, browser?: string) => {
-    if (platform === 'mobile' || /android|iphone|ipad/i.test(browser || '')) {
+  const getDeviceIcon = (platform: string) => {
+    if (platform === 'mobile') {
       return <Smartphone className="w-5 h-5 text-slate-300" />;
     }
-    if (platform === 'desktop') {
-      return <Monitor className="w-5 h-5 text-slate-300" />;
-    }
-    return <Globe className="w-5 h-5 text-slate-300" />;
+    return <Monitor className="w-5 h-5 text-slate-300" />;
   };
 
   return (
@@ -103,101 +88,87 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       maxWidth="md"
-      title="Dispositivos & Sessões Ativas"
-      description="Monitore aparelhos conectados ao seu perfil LUNE e encerre acessos suspeitos."
+      title="Sessões Ativas (Supabase Auth)"
+      description="Dispositivos conectados à sua conta na infraestrutura em nuvem."
       icon={<ShieldAlert className="w-6 h-6 text-slate-200" />}
     >
-      <div className="space-y-4 text-left">
+      <div className="space-y-4">
         {msg && (
-          <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-emerald-400" />
-            <span>{msg}</span>
+          <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-medium text-left">
+            {msg}
           </div>
         )}
 
         <div className="flex items-center justify-between">
-          <span className="text-xs text-slate-400">
-            {sessions.length} {sessions.length === 1 ? 'dispositivo ativo' : 'dispositivos ativos'}
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+            Sessão Atual ({sessions.length})
           </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={fetchSessions}
-              className="text-xs text-slate-400 hover:text-white flex items-center gap-1 transition"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Atualizar
-            </button>
-            {sessions.filter((s) => !s.isCurrent).length > 0 && (
-              <LuneButton
-                type="button"
-                variant="obsidian"
-                size="sm"
-                loading={actionLoading}
-                onClick={handleRevokeOthers}
-              >
-                <LogOut className="w-3.5 h-3.5 mr-1 text-red-400" /> Desconectar Outros
-              </LuneButton>
-            )}
-          </div>
+          <button
+            onClick={fetchSessions}
+            disabled={loading}
+            className="text-xs text-slate-400 hover:text-white flex items-center gap-1 transition"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Atualizar
+          </button>
         </div>
 
-        {loading && sessions.length === 0 ? (
-          <div className="py-12 text-center text-xs text-slate-400">Consultando sessões ativas...</div>
-        ) : (
-          <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
-            {sessions.map((s) => (
-              <div
-                key={s.id}
-                className={`p-3.5 rounded-xl border flex items-center justify-between transition ${
-                  s.isCurrent
-                    ? 'bg-white/[0.04] border-white/20 shadow-sm'
-                    : 'bg-white/[0.02] border-white/5 hover:border-white/10'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-xl bg-white/[0.05] border border-white/10">
-                    {getDeviceIcon(s.platform, s.browser)}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-slate-200">
-                        {s.deviceName || 'Navegador Web'}
+        <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+          {sessions.map((session) => (
+            <div
+              key={session.id}
+              className={`p-3.5 rounded-2xl border transition text-left flex items-center justify-between gap-3 ${
+                session.isCurrent
+                  ? 'bg-white/[0.06] border-white/20'
+                  : 'bg-white/[0.02] border-white/10'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-white/5 border border-white/10">
+                  {getDeviceIcon(session.platform)}
+                </div>
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-white">
+                      {session.browser}
+                    </span>
+                    {session.isCurrent && (
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                        Esta Sessão
                       </span>
-                      {s.isCurrent && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
-                          Este Dispositivo
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[11px] text-slate-400 mt-0.5 space-x-2">
-                      <span>{s.browser}</span>
-                      <span>•</span>
-                      <span>IP: {s.ip || 'Local'}</span>
-                    </div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">
-                      Última atividade: {new Date(s.lastActiveAt).toLocaleString()}
-                    </div>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-400 font-mono">
+                    {session.ip} • Ativa agora
                   </div>
                 </div>
-
-                {!s.isCurrent && (
-                  <button
-                    type="button"
-                    onClick={() => handleRevokeSingle(s.id)}
-                    className="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition text-xs"
-                    title="Desconectar este dispositivo"
-                  >
-                    <LogOut className="w-4 h-4" />
-                  </button>
-                )}
               </div>
-            ))}
-          </div>
-        )}
 
-        <div className="pt-3 border-t border-white/10 flex justify-end">
-          <LuneButton type="button" variant="ghost" onClick={onClose}>
-            Concluir
+              {session.isCurrent ? (
+                <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
+              ) : (
+                <button
+                  onClick={() => handleRevokeSingle(session.id)}
+                  className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition shrink-0"
+                  title="Desconectar"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="pt-2">
+          <LuneButton
+            variant="obsidian"
+            size="sm"
+            loading={actionLoading}
+            onClick={handleRevokeOthers}
+            className="w-full py-2.5 text-xs text-red-300 hover:text-red-200 border-red-500/20 hover:border-red-500/40"
+          >
+            <LogOut className="w-4 h-4 mr-1.5" />
+            Desconectar de Todos os Outros Dispositivos
           </LuneButton>
         </div>
       </div>
