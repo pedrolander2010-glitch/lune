@@ -1,5 +1,6 @@
 import React from 'react';
 import { LunePresence } from '../../types';
+import { getAssetUrl, LUNE_LOGO_URL } from '../../utils/assets';
 
 export interface LuneAvatarProps {
   src?: string;
@@ -66,7 +67,7 @@ export const LuneAvatar: React.FC<LuneAvatarProps> = ({
       >
         {src ? (
           <img
-            src={src}
+            src={getAssetUrl(src)}
             alt={name}
             className="w-full h-full object-cover"
             onError={(e) => {
@@ -76,7 +77,7 @@ export const LuneAvatar: React.FC<LuneAvatarProps> = ({
           />
         ) : (
           <div className="flex items-center justify-center w-full h-full bg-[#12141d] p-1">
-            <img src="/logo.svg" alt="LUNE" className="w-4/5 h-4/5 object-contain filter drop-shadow opacity-90" />
+            <img src={LUNE_LOGO_URL} alt="LUNE" className="w-4/5 h-4/5 object-contain filter drop-shadow opacity-90" />
           </div>
         )}
       </div>

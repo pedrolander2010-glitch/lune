@@ -1,3 +1,5 @@
+import { LUNE_ICON_192_URL } from './assets';
+
 /**
  * Audio synthesis using Web Audio API for push/in-app alert sounds.
  * Zero external asset dependencies.
@@ -134,7 +136,7 @@ export function stopRingtone() {
 /**
  * Dispatch desktop / mobile browser push notification
  */
-export async function dispatchPushNotification(title: string, body: string, icon = '/icon-192.png') {
+export async function dispatchPushNotification(title: string, body: string, icon = LUNE_ICON_192_URL) {
   if (typeof window === 'undefined' || !('Notification' in window)) return;
 
   if (Notification.permission === 'granted') {

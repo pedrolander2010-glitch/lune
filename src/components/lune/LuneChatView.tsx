@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { LuneAvatar } from './LuneAvatar';
 import { LuneEmojiPicker } from './LuneEmojiPicker';
 import { LuneGifPicker } from './LuneGifPicker';
+import { LUNE_LOGO_URL } from '../../utils/assets';
 import {
   Send,
   Smile,
@@ -54,7 +55,7 @@ export const LuneChatView: React.FC<LuneChatViewProps> = ({
     : null;
 
   const title = conversation.name || otherMember?.displayName || 'Conversa LUNE';
-  const avatar = conversation.icon || otherMember?.avatar || '/logo.svg';
+  const avatar = conversation.icon || otherMember?.avatar || LUNE_LOGO_URL;
   const subtitle = conversation.type === 'DM'
     ? `@${otherMember?.username || 'amigo'} • ${otherMember?.presence || 'OFFLINE'}`
     : `${conversation.members.length} membros`;
@@ -255,7 +256,7 @@ export const LuneChatView: React.FC<LuneChatViewProps> = ({
       <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
         {messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center space-y-2 opacity-60">
-            <img src="/logo.svg" alt="LUNE" className="w-12 h-12 object-contain" />
+            <img src={LUNE_LOGO_URL} alt="LUNE" className="w-12 h-12 object-contain" />
             <span className="text-xs text-slate-400">
               Início da conversa criptografada com {title}.
             </span>

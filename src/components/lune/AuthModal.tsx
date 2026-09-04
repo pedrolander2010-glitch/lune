@@ -4,6 +4,7 @@ import { LuneInput } from './LuneInput';
 import { LuneButton } from './LuneButton';
 import { Lock, Mail, User, KeyRound, Sparkles, LogIn, UserPlus } from 'lucide-react';
 import { LuneUser } from '../../types';
+import { LUNE_LOGO_URL } from '../../utils/assets';
 
 export interface AuthModalProps {
   isOpen: boolean;
@@ -73,7 +74,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           username,
           email,
           password,
-          avatar: '/logo.svg',
+          avatar: LUNE_LOGO_URL,
         }),
       });
       const data = await res.json();
@@ -139,7 +140,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           ? 'Escolha seu @username único e entre na plataforma'
           : 'Instruções para redefinir suas credenciais'
       }
-      icon={<img src="/logo.svg" alt="LUNE" className="w-6 h-6 object-contain" />}
+      icon={<img src={LUNE_LOGO_URL} alt="LUNE" className="w-6 h-6 object-contain" />}
     >
       {error && (
         <div className="p-3 mb-4 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-medium">

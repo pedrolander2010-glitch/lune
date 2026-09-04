@@ -1459,6 +1459,11 @@ wss.on('connection', (ws: WebSocket) => {
 
 // Setup Vite or Static File Serving
 async function startServer() {
+  // Redirect root to /lune/ base path
+  app.get('/', (req, res) => {
+    res.redirect('/lune/');
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1467,7 +1472,11 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
+    app.use('/lune', express.static(distPath));
     app.use(express.static(distPath));
+    app.get('/lune/*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });

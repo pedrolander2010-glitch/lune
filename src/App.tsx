@@ -40,6 +40,7 @@ import { LuneFriendsView } from './components/lune/LuneFriendsView';
 import { LuneChatView } from './components/lune/LuneChatView';
 import { LuneAvatar } from './components/lune/LuneAvatar';
 import { LuneButton } from './components/lune/LuneButton';
+import { LUNE_LOGO_URL } from './utils/assets';
 
 import {
   MessageSquare,
@@ -609,7 +610,7 @@ export default function App() {
             onClick={() => setIsSecurityOpen(true)}
             title="LUNE Platform"
           >
-            <img src="/logo.svg" alt="LUNE" className="w-full h-full object-contain filter drop-shadow" />
+            <img src={LUNE_LOGO_URL} alt="LUNE" className="w-full h-full object-contain filter drop-shadow" />
             <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-[#08080b]" />
           </div>
 
@@ -713,7 +714,7 @@ export default function App() {
               title={luneUser ? `@${luneUser.username}` : 'Entrar / Criar Conta'}
             >
               <LuneAvatar
-                src={luneUser?.avatar || '/logo.svg'}
+                src={luneUser?.avatar || LUNE_LOGO_URL}
                 name={luneUser?.displayName || 'Convidado'}
                 status={luneUser?.presence || 'OFFLINE'}
                 size="sm"
@@ -841,7 +842,7 @@ export default function App() {
                 const isSelected = c.id === selectedConversationId;
                 const other = c.type === 'DM' ? c.members.find((m) => m.userId !== luneUser?.id) : null;
                 const convTitle = c.name || other?.displayName || 'Conversa LUNE';
-                const convAvatar = c.icon || other?.avatar || '/logo.svg';
+                const convAvatar = c.icon || other?.avatar || LUNE_LOGO_URL;
 
                 return (
                   <button
@@ -901,7 +902,7 @@ export default function App() {
           ) : (
             <div className="h-full flex flex-col items-center justify-center p-6 text-center space-y-4">
               <div className="w-16 h-16 rounded-3xl p-3 bg-white/[0.03] border border-white/10 shadow-2xl flex items-center justify-center">
-                <img src="/logo.svg" alt="LUNE" className="w-full h-full object-contain filter drop-shadow" />
+                <img src={LUNE_LOGO_URL} alt="LUNE" className="w-full h-full object-contain filter drop-shadow" />
               </div>
               <div className="space-y-1">
                 <h2 className="text-lg font-bold text-white">Bem-vindo ao LUNE</h2>
@@ -930,7 +931,7 @@ export default function App() {
         {!luneUser && !authChecking && (
           <div className="h-full flex-1 flex flex-col items-center justify-center p-6 text-center space-y-6 max-w-lg mx-auto">
             <div className="w-20 h-20 rounded-3xl p-4 bg-white/[0.04] border border-white/10 shadow-2xl flex items-center justify-center relative">
-              <img src="/logo.svg" alt="LUNE" className="w-full h-full object-contain filter drop-shadow" />
+              <img src={LUNE_LOGO_URL} alt="LUNE" className="w-full h-full object-contain filter drop-shadow" />
               <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-emerald-400 border-2 border-[#0a0a0d] animate-pulse" />
             </div>
 
@@ -1125,7 +1126,7 @@ export default function App() {
             className="flex flex-col items-center justify-center py-1 px-3 rounded-xl transition min-w-[54px] min-h-[44px] active:scale-95 text-slate-400 hover:text-slate-200"
           >
             <LuneAvatar
-              src={luneUser?.avatar || '/logo.svg'}
+              src={luneUser?.avatar || LUNE_LOGO_URL}
               name={luneUser?.displayName || 'Convidado'}
               status={luneUser?.presence || 'OFFLINE'}
               size="xs"

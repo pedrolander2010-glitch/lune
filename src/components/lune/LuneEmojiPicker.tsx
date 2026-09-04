@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Search, Sparkles, Heart, Clock, Smile, Flame, Shield, Star } from 'lucide-react';
 import { LuneEmoji } from '../../types';
+import { LUNE_LOGO_URL, LUNE_ICON_URL } from '../../utils/assets';
 
 export interface LuneEmojiPickerProps {
   onSelectEmoji: (emojiStr: string) => void;
@@ -8,8 +9,8 @@ export interface LuneEmojiPickerProps {
 }
 
 const DEFAULT_LUNE_EMOJIS: LuneEmoji[] = [
-  { id: 'lune_cat', name: 'lune_cat', url: '/logo.svg', isAnimated: false },
-  { id: 'lune_chrome', name: 'lune_chrome', url: '/icon.svg', isAnimated: false },
+  { id: 'lune_cat', name: 'lune_cat', url: LUNE_LOGO_URL, isAnimated: false },
+  { id: 'lune_chrome', name: 'lune_chrome', url: LUNE_ICON_URL, isAnimated: false },
 ];
 
 const UNICODE_CATEGORIES = [
